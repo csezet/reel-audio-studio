@@ -1,0 +1,29 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+
+# Binaries (FFmpeg/FFprobe should be placed locally in bin/)
+bin/*.exe
+!bin/PUT_FFMPEG_HERE.txt
+
+# Logs and temp files
+*.log
+app_error.log
+
+# OS generated
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

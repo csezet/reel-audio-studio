@@ -1,0 +1,784 @@
+from __future__ import annotations
+
+import shutil
+import tempfile
+import uuid
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QIcon, QMouseEvent, QPainter, QPalette, QPen
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
+    QButtonGroup,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
+
+from reel_audio.engine.deepfilter import deepfilter_available
+from reel_audio.engine.processor import ProcessingSettings
+from reel_audio.engine.tools import find_executable, media_summary
+from reel_audio.engine.vad import silero_available
+from .vector_icons import draw_vector_icon, make_icon, make_state_icon
+from .waveform_widget import WaveformWidget
+from .windows_effects import apply_windows_backdrop
+from .workers import ProcessingThread, WaveformThread
+
+SUPPORTED = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac", ".aac"}
+
+
+class ToggleSwitch(QAbstractButton):
+    def __init__(self, checked: bool = True, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(42, 23)
+        self.toggled.connect(lambda _v: self.update())
+
+    def sizeHint(self) -> QSize:
+        return QSize(42, 23)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(0.7, 0.7, self.width() - 1.4, self.height() - 1.4)
+        if not self.isEnabled():
+            track, knob = QColor(70, 77, 85, 115), QColor(137, 145, 153, 130)
+        elif self.isChecked():
+            track, knob = QColor(219, 226, 232, 230), QColor(69, 77, 85, 245)
+        else:
+            track, knob = QColor(93, 101, 110, 175), QColor(211, 217, 223, 220)
+        painter.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        painter.setBrush(track)
+        painter.drawRoundedRect(rect, 11, 11)
+        diameter = 17.0
+        x = self.width() - diameter - 3.0 if self.isChecked() else 3.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(knob)
+        painter.drawEllipse(QRectF(x, 3.0, diameter, diameter))
+
+
+class GlassSlider(QSlider):
+    """Small custom-painted slider used to avoid native/QSS fill artifacts on Windows.
+
+    Qt's platform slider and QSS sub-page rendering can produce chunky rectangular
+    fills at some DPI/scaling combinations.  This widget paints the groove, progress
+    and handle itself while keeping QSlider's value/signals API.
+    """
+
+    def __init__(self, orientation=Qt.Orientation.Horizontal, *, track_height: int = 4, handle_diameter: int = 13, parent=None):
+        super().__init__(orientation, parent)
+        self._track_height = track_height
+        self._handle_diameter = handle_diameter
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        if orientation == Qt.Orientation.Horizontal:
+            self.setMinimumHeight(max(18, handle_diameter + 6))
+        self.valueChanged.connect(lambda _v: self.update())
+        self.rangeChanged.connect(lambda _a, _b: self.update())
+
+    def _ratio(self) -> float:
+        span = self.maximum() - self.minimum()
+        return 0.0 if span <= 0 else (self.value() - self.minimum()) / span
+
+    def _value_from_pos(self, pos: float) -> int:
+        if self.orientation() == Qt.Orientation.Horizontal:
+            usable = max(1.0, self.width() - self._handle_diameter)
+            r = (pos - self._handle_diameter / 2.0) / usable
+        else:
+            usable = max(1.0, self.height() - self._handle_diameter)
+            r = 1.0 - ((pos - self._handle_diameter / 2.0) / usable)
+        r = max(0.0, min(1.0, r))
+        return round(self.minimum() + r * (self.maximum() - self.minimum()))
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        enabled = self.isEnabled()
+        d = float(self._handle_diameter)
+        ratio = self._ratio()
+
+        if self.orientation() == Qt.Orientation.Horizontal:
+            left = d / 2.0
+            right = self.width() - d / 2.0
+            cy = self.height() / 2.0
+            track = QRectF(left, cy - self._track_height / 2.0, max(1.0, right - left), self._track_height)
+            px = left + track.width() * ratio
+            progress = QRectF(track.left(), track.top(), max(0.0, px - track.left()), track.height())
+            knob = QRectF(px - d / 2.0, cy - d / 2.0, d, d)
+        else:
+            top = d / 2.0
+            bottom = self.height() - d / 2.0
+            cx = self.width() / 2.0
+            track = QRectF(cx - self._track_height / 2.0, top, self._track_height, max(1.0, bottom - top))
+            py = bottom - track.height() * ratio
+            progress = QRectF(track.left(), py, track.width(), max(0.0, bottom - py))
+            knob = QRectF(cx - d / 2.0, py - d / 2.0, d, d)
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(171, 184, 196, 45 if enabled else 24))
+        p.drawRoundedRect(track, self._track_height / 2.0, self._track_height / 2.0)
+        if progress.width() > 0 and progress.height() > 0:
+            p.setBrush(QColor(206, 216, 224, 132 if enabled else 48))
+            p.drawRoundedRect(progress, self._track_height / 2.0, self._track_height / 2.0)
+
+        p.setPen(QPen(QColor(255, 255, 255, 78 if enabled else 26), 1))
+        p.setBrush(QColor(224, 231, 236, 235 if enabled else 90))
+        p.drawEllipse(knob)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self.setSliderDown(True)
+            pos = event.position().x() if self.orientation() == Qt.Orientation.Horizontal else event.position().y()
+            self.setValue(self._value_from_pos(pos))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self.isSliderDown() and self.isEnabled():
+            pos = event.position().x() if self.orientation() == Qt.Orientation.Horizontal else event.position().y()
+            self.setValue(self._value_from_pos(pos))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            pos = event.position().x() if self.orientation() == Qt.Orientation.Horizontal else event.position().y()
+            self.setValue(self._value_from_pos(pos))
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class IconBadge(QWidget):
+    def __init__(self, icon_name: str, size: int = 52, parent=None):
+        super().__init__(parent)
+        self.icon_name = icon_name
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor(255, 255, 255, 35), 1))
+        p.setBrush(QColor(110, 122, 134, 74))
+        p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 14, 14)
+        draw_vector_icon(p, self.icon_name, QRectF(12, 12, self.width() - 24, self.height() - 24), QColor("#e7edf3"), 1.8)
+
+
+class CaptionButton(QAbstractButton):
+    def __init__(self, kind: str, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.setFixedSize(46, 34)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def enterEvent(self, event):
+        self.update(); super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update(); super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        hovered = self.underMouse()
+        pressed = self.isDown()
+        if self.kind == "close" and hovered:
+            p.fillRect(self.rect(), QColor(196, 54, 65, 235 if not pressed else 255))
+        elif hovered:
+            p.fillRect(self.rect(), QColor(255, 255, 255, 17 if not pressed else 28))
+        pen = QPen(QColor("#dce3e9"), 1.25)
+        pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+        p.setPen(pen)
+        cx, cy = self.width() / 2.0, self.height() / 2.0
+        if self.kind == "min":
+            p.drawLine(cx - 5, cy + 1, cx + 5, cy + 1)
+        elif self.kind == "max":
+            window = self.window()
+            if hasattr(window, "isMaximized") and window.isMaximized():
+                p.drawRect(QRectF(cx - 4.2, cy - 3.2, 8, 7))
+                p.drawRect(QRectF(cx - 2.2, cy - 5.2, 8, 7))
+            else:
+                p.drawRect(QRectF(cx - 4.5, cy - 4.5, 9, 9))
+        else:
+            p.drawLine(cx - 4.5, cy - 4.5, cx + 4.5, cy + 4.5)
+            p.drawLine(cx + 4.5, cy - 4.5, cx - 4.5, cy + 4.5)
+
+
+class TitleBar(QWidget):
+    def __init__(self, window: "MainWindow"):
+        super().__init__(window)
+        self.owner = window
+        self.setObjectName("TitleBar")
+        self.setFixedHeight(64)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(18, 8, 4, 5)
+        row.setSpacing(12)
+        badge = IconBadge("waveform", 48)
+        row.addWidget(badge)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(1)
+        title = QLabel("R E E L   A U D I O   S T U D I O")
+        title.setObjectName("Title")
+        subtitle = QLabel("ЧИСТЫЙ ЗВУК ДЛЯ ВАШИХ REELS")
+        subtitle.setObjectName("Subtitle")
+        title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        subtitle.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        texts.addStretch(1); texts.addWidget(title); texts.addWidget(subtitle); texts.addStretch(1)
+        row.addLayout(texts)
+        row.addStretch(1)
+
+        self.settings_btn = QPushButton("Настройки")
+        self.settings_btn.setObjectName("TitleGhostButton")
+        self.settings_btn.setIcon(make_icon("settings", "#c4ccd4"))
+        self.settings_btn.setIconSize(QSize(18, 18))
+        self.settings_btn.clicked.connect(window.show_system_info)
+        row.addWidget(self.settings_btn)
+
+        controls = QHBoxLayout(); controls.setSpacing(0); controls.setContentsMargins(4, 0, 0, 0)
+        self.min_btn = CaptionButton("min")
+        self.max_btn = CaptionButton("max")
+        self.close_btn = CaptionButton("close")
+        self.min_btn.clicked.connect(window.showMinimized)
+        self.max_btn.clicked.connect(window.toggle_maximize)
+        self.close_btn.clicked.connect(window.close)
+        controls.addWidget(self.min_btn); controls.addWidget(self.max_btn); controls.addWidget(self.close_btn)
+        row.addLayout(controls)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and not self.owner.isMaximized():
+            wh = self.owner.windowHandle()
+            if wh and wh.startSystemMove():
+                event.accept(); return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.owner.toggle_maximize(); event.accept(); return
+        super().mouseDoubleClickEvent(event)
+
+
+class ResizeHandle(QWidget):
+    def __init__(self, owner: "MainWindow", edges: Qt.Edge, cursor: Qt.CursorShape):
+        super().__init__(owner)
+        self.owner = owner
+        self.edges = edges
+        self.setCursor(cursor)
+        self.setStyleSheet("background: transparent;")
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and not self.owner.isMaximized():
+            wh = self.owner.windowHandle()
+            if wh:
+                wh.startSystemResize(self.edges)
+                event.accept(); return
+        super().mousePressEvent(event)
+
+
+class DropFrame(QFrame):
+    def __init__(self, on_file, parent=None):
+        super().__init__(parent)
+        self.on_file = on_file
+        self.setAcceptDrops(True)
+        self.setObjectName("DropFrame")
+
+    def dragEnterEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls and Path(urls[0].toLocalFile()).suffix.lower() in SUPPORTED:
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            self.on_file(urls[0].toLocalFile())
+            event.acceptProposedAction()
+
+
+class SettingCard(QFrame):
+    def __init__(self, icon_name: str, title: str, description: str, *, value: int | None = None, enabled: bool = True, parent=None):
+        super().__init__(parent)
+        self.setObjectName("SettingCard")
+        self.setMinimumWidth(160)
+        self.setFixedHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(6)
+        top = QHBoxLayout(); top.setSpacing(8)
+        icon = QLabel(); icon.setObjectName("CardIcon")
+        icon.setPixmap(make_icon(icon_name, "#bbc6d0", 72).pixmap(24, 24))
+        icon.setFixedSize(28, 28)
+        top.addWidget(icon); top.addStretch(1)
+        self.toggle = ToggleSwitch(enabled); top.addWidget(self.toggle)
+        outer.addLayout(top)
+
+        title_label = QLabel(title); title_label.setObjectName("CardTitle")
+        desc = QLabel(description); desc.setObjectName("CardDescription"); desc.setWordWrap(True)
+        desc.setMaximumHeight(34)
+        outer.addWidget(title_label); outer.addWidget(desc); outer.addStretch(1)
+
+        self.bottom = QHBoxLayout(); self.bottom.setSpacing(7)
+        self.slider: QSlider | None = None
+        self.value_label: QLabel | None = None
+        if value is not None:
+            self.slider = GlassSlider(Qt.Orientation.Horizontal, track_height=4, handle_diameter=13); self.slider.setRange(0, 100); self.slider.setValue(value)
+            self.value_label = QLabel(f"{value}%"); self.value_label.setObjectName("ValueLabel"); self.value_label.setMinimumWidth(34)
+            self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.slider.valueChanged.connect(lambda v: self.value_label.setText(f"{v}%"))
+            self.bottom.addWidget(self.slider, 1); self.bottom.addWidget(self.value_label)
+        outer.addLayout(self.bottom)
+
+    def value(self) -> int:
+        return self.slider.value() if self.slider is not None else 0
+
+    def set_value(self, value: int) -> None:
+        if self.slider is not None:
+            self.slider.setValue(value)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Reel Audio Studio")
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0, 0))
+        self.setPalette(palette)
+        self.setMinimumSize(1120, 800)
+        self.resize(1400, 850)
+
+        self.input_path: Path | None = None
+        self.processed_path: Path | None = None
+        self._temp_root = Path(tempfile.mkdtemp(prefix="reelaudio_preview_"))
+        self.processing_thread: ProcessingThread | None = None
+        self.wave_thread: WaveformThread | None = None
+        self._seeking = False
+        self._last_info: dict | None = None
+        saved_recent = QSettings("ReelAudioStudio", "ReelAudioStudio").value("recent_files", [])
+        if isinstance(saved_recent, str):
+            saved_recent = [saved_recent] if saved_recent else []
+        self._recent = list(saved_recent or [])
+
+        self.audio_out = QAudioOutput(self); self.audio_out.setVolume(0.9)
+        self.player = QMediaPlayer(self); self.player.setAudioOutput(self.audio_out)
+        self.player.positionChanged.connect(self._on_position)
+        self.player.durationChanged.connect(self._on_duration)
+        self.player.playbackStateChanged.connect(self._on_playback_state)
+
+        central = QWidget(); central.setObjectName("TransparentRoot")
+        self.setCentralWidget(central)
+        self.window_layout = QVBoxLayout(central); self.window_layout.setContentsMargins(0, 0, 0, 0); self.window_layout.setSpacing(0)
+
+        self.shell = QFrame(); self.shell.setObjectName("GlassShell")
+        self.window_layout.addWidget(self.shell)
+
+        shell_layout = QVBoxLayout(self.shell); shell_layout.setContentsMargins(0, 0, 0, 10); shell_layout.setSpacing(0)
+        self.title_bar = TitleBar(self); shell_layout.addWidget(self.title_bar)
+
+        body = QWidget(); body.setObjectName("Body")
+        shell_layout.addWidget(body, 1)
+        layout = QVBoxLayout(body); layout.setContentsMargins(18, 5, 18, 10); layout.setSpacing(9)
+
+        # File picker / drop area
+        self.drop = DropFrame(self.load_file)
+        self.drop.setFixedHeight(70)
+        drop_layout = QHBoxLayout(self.drop); drop_layout.setContentsMargins(14, 10, 14, 10); drop_layout.setSpacing(12)
+        plus = IconBadge("plus", 50); drop_layout.addWidget(plus)
+        file_box = QVBoxLayout(); file_box.setSpacing(2)
+        self.file_label = QLabel("Выберите видео или перетащите файл сюда"); self.file_label.setObjectName("FileLabel")
+        self.file_hint = QLabel("MP4, MOV, MKV, WebM, WAV, MP3  •  локальная обработка"); self.file_hint.setObjectName("Muted")
+        file_box.addStretch(1); file_box.addWidget(self.file_label); file_box.addWidget(self.file_hint); file_box.addStretch(1)
+        drop_layout.addLayout(file_box, 1)
+        self.open_btn = QPushButton("Открыть файл"); self.open_btn.setObjectName("SecondaryButton"); self.open_btn.setIcon(make_icon("folder", "#dbe2e8")); self.open_btn.setIconSize(QSize(20,20)); self.open_btn.clicked.connect(self.open_file); drop_layout.addWidget(self.open_btn)
+        self.history_btn = QPushButton("История"); self.history_btn.setObjectName("SecondaryButton"); self.history_btn.setIcon(make_icon("history", "#dbe2e8")); self.history_btn.setIconSize(QSize(20,20)); self.history_btn.clicked.connect(self.show_history_menu); drop_layout.addWidget(self.history_btn)
+        layout.addWidget(self.drop)
+
+        # Presets
+        preset_row = QHBoxLayout(); preset_row.setSpacing(7)
+        self.preset_group = QButtonGroup(self); self.preset_group.setExclusive(True); self.preset_buttons: dict[str, QPushButton] = {}
+        preset_defs = [
+            ("Auto", "sparkles", "AUTO", "Автоматическая обработка"),
+            ("Voice Clean", "mic", "VOICE CLEAN", "Чистый голос"),
+            ("Street / Car", "car", "STREET", "Улица / Машина"),
+            ("Voice + Music", "music", "VOICE + MUSIC", "Голос + Музыка"),
+            ("Podcast", "users", "PODCAST", "Интервью / Подкаст"),
+        ]
+        for key, icon_name, title, desc in preset_defs:
+            btn = QPushButton(f"{title}\n{desc}"); btn.setCheckable(True); btn.setObjectName("PresetButton"); btn.setFixedHeight(62)
+            btn.setIcon(make_state_icon(icon_name, "#c5ced6", "#273038")); btn.setIconSize(QSize(23,23))
+            btn.clicked.connect(lambda checked, name=key: self.apply_preset(name) if checked else None)
+            self.preset_group.addButton(btn); self.preset_buttons[key] = btn; preset_row.addWidget(btn, 1)
+        self.preset_buttons["Auto"].setChecked(True); layout.addLayout(preset_row)
+
+        # Waveform / player
+        self.media_panel = QFrame(); self.media_panel.setObjectName("Panel"); self.media_panel.setFixedHeight(244)
+        media_layout = QVBoxLayout(self.media_panel); media_layout.setContentsMargins(15, 12, 15, 11); media_layout.setSpacing(7)
+        media_header = QHBoxLayout(); media_header.setSpacing(7)
+        media_names = QVBoxLayout(); media_names.setSpacing(1)
+        self.media_name = QLabel("Файл не выбран"); self.media_name.setObjectName("MediaName")
+        self.media_meta = QLabel("Перетащите ролик в область выше"); self.media_meta.setObjectName("Muted")
+        media_names.addWidget(self.media_name); media_names.addWidget(self.media_meta); media_header.addLayout(media_names,1)
+        self.before_btn = QPushButton("До обработки"); self.before_btn.setObjectName("CompareButton"); self.before_btn.setCheckable(True); self.before_btn.setChecked(True); self.before_btn.clicked.connect(lambda: self.switch_source(False)); media_header.addWidget(self.before_btn)
+        self.after_btn = QPushButton("После обработки"); self.after_btn.setObjectName("CompareButton"); self.after_btn.setCheckable(True); self.after_btn.setEnabled(False); self.after_btn.clicked.connect(lambda: self.switch_source(True)); media_header.addWidget(self.after_btn)
+        self.time_label = QLabel("00:00 / 00:00"); self.time_label.setObjectName("TimeLabel"); media_header.addWidget(self.time_label)
+        expand = QPushButton(); expand.setObjectName("SquareButton"); expand.setIcon(make_icon("expand", "#c9d2da")); expand.setIconSize(QSize(18,18)); expand.setFixedSize(36,34); expand.setToolTip("Развернуть окно"); expand.clicked.connect(self.toggle_maximize); media_header.addWidget(expand)
+        media_layout.addLayout(media_header)
+
+        self.waveform = WaveformWidget(); self.waveform.setMinimumHeight(118); self.waveform.setMaximumHeight(136); media_layout.addWidget(self.waveform, 1)
+        self.timeline = GlassSlider(Qt.Orientation.Horizontal, track_height=3, handle_diameter=11); self.timeline.setObjectName("Timeline"); self.timeline.setRange(0,0); self.timeline.setFixedHeight(18)
+        self.timeline.sliderPressed.connect(lambda: setattr(self, "_seeking", True)); self.timeline.sliderReleased.connect(self._seek_release); media_layout.addWidget(self.timeline)
+        transport = QHBoxLayout(); transport.setSpacing(9)
+        self.play_btn = QPushButton(); self.play_btn.setObjectName("PlayButton"); self.play_btn.setIcon(make_icon("play", "#f1f5f8")); self.play_btn.setIconSize(QSize(22,22)); self.play_btn.setFixedSize(46,46); self.play_btn.clicked.connect(self.toggle_play); self.play_btn.setEnabled(False); transport.addWidget(self.play_btn)
+        self.skip_back = QPushButton(); self.skip_back.setObjectName("TransportButton"); self.skip_back.setIcon(make_icon("skip-back", "#cbd4dc")); self.skip_back.setIconSize(QSize(19,19)); self.skip_back.clicked.connect(lambda: self.player.setPosition(max(0, self.player.position()-5000))); transport.addWidget(self.skip_back)
+        self.skip_forward = QPushButton(); self.skip_forward.setObjectName("TransportButton"); self.skip_forward.setIcon(make_icon("skip-forward", "#cbd4dc")); self.skip_forward.setIconSize(QSize(19,19)); self.skip_forward.clicked.connect(lambda: self.player.setPosition(min(self.player.duration(), self.player.position()+5000))); transport.addWidget(self.skip_forward)
+        vol_icon = QLabel(); vol_icon.setPixmap(make_icon("volume", "#bdc7d0").pixmap(21,21)); vol_icon.setFixedSize(24,24); transport.addWidget(vol_icon)
+        self.volume_slider = GlassSlider(Qt.Orientation.Horizontal, track_height=4, handle_diameter=13); self.volume_slider.setRange(0,100); self.volume_slider.setValue(90); self.volume_slider.setFixedWidth(210); self.volume_slider.valueChanged.connect(lambda v: self.audio_out.setVolume(v/100.0)); transport.addWidget(self.volume_slider)
+        transport.addStretch(1)
+        self.rate = QComboBox(); self.rate.setObjectName("CompactCombo"); self.rate.addItems(["0.75x","1.0x","1.25x","1.5x"]); self.rate.setCurrentText("1.0x"); self.rate.currentTextChanged.connect(lambda t: self.player.setPlaybackRate(float(t[:-1]))); transport.addWidget(self.rate)
+        media_layout.addLayout(transport); layout.addWidget(self.media_panel)
+
+        # Setting cards; responsive 6x1 on wide windows, 3x2 on narrower windows.
+        self.cards_widget = QWidget(); self.cards_grid = QGridLayout(self.cards_widget); self.cards_grid.setContentsMargins(0,0,0,0); self.cards_grid.setHorizontalSpacing(8); self.cards_grid.setVerticalSpacing(8)
+        self.noise_card = SettingCard("waves", "Шумоподавление", "Убирает фоновые шумы, ветер и гул", value=70)
+        self.presence_card = SettingCard("voice", "Выразительность голоса", "Делает голос яснее и ближе", value=60)
+        self.compression_card = SettingCard("compression", "Компрессия", "Выравнивает громкость и удерживает пики", value=50)
+        self.ducking_card = SettingCard("music", "Приглушение музыки", "Автоматически снижает музыку во время речи", value=70, enabled=False)
+        self.ducking_card.toggle.setEnabled(False)
+        if self.ducking_card.slider: self.ducking_card.slider.setEnabled(False)
+        self.ducking_card.setToolTip("Модуль разделения голоса и музыки пока не подключён.")
+        self.pause_card = SettingCard("scissors", "Удаление длинных пауз", "Находит тишину и синхронно сокращает видео", value=None, enabled=False)
+        self.keep_pause = QComboBox(); self.keep_pause.setObjectName("CardCombo"); self.keep_pause.addItems(["120 мс","180 мс","250 мс","350 мс"]); self.keep_pause.setCurrentText("180 мс"); self.pause_card.bottom.addWidget(self.keep_pause,1)
+        self.ai_vad = QPushButton("Silero"); self.ai_vad.setObjectName("ChipButton"); self.ai_vad.setCheckable(True); self.ai_vad.setEnabled(silero_available()); self.ai_vad.setIcon(make_state_icon("sparkles", "#bfc9d1", "#29323a")); self.ai_vad.setIconSize(QSize(14,14)); self.pause_card.bottom.addWidget(self.ai_vad)
+        if not silero_available(): self.ai_vad.setToolTip("Опционально: pip install silero-vad")
+        self.normalize_card = SettingCard("normalize", "Авто-нормализация", "Приводит громкость к выбранной цели LUFS", value=None, enabled=True)
+        self.lufs = QComboBox(); self.lufs.setObjectName("CardCombo"); self.lufs.addItems(["-16 LUFS","-14 LUFS","-12 LUFS"]); self.lufs.setCurrentText("-14 LUFS"); self.normalize_card.bottom.addWidget(self.lufs,1)
+        self.deepfilter = QPushButton("DeepFilter"); self.deepfilter.setObjectName("ChipButton"); self.deepfilter.setCheckable(True); self.deepfilter.setEnabled(deepfilter_available()); self.deepfilter.setIcon(make_state_icon("sparkles", "#bfc9d1", "#29323a")); self.deepfilter.setIconSize(QSize(14,14)); self.noise_card.bottom.addWidget(self.deepfilter)
+        if not deepfilter_available(): self.deepfilter.setToolTip("Опционально: pip install deepfilternet")
+        self.card_list = [self.noise_card,self.presence_card,self.compression_card,self.ducking_card,self.pause_card,self.normalize_card]
+        layout.addWidget(self.cards_widget)
+
+        # Main action
+        action_panel = QFrame(); action_panel.setObjectName("ActionPanel"); action_panel.setFixedHeight(60)
+        action_layout = QHBoxLayout(action_panel); action_layout.setContentsMargins(10,7,10,7); action_layout.setSpacing(10)
+        action_layout.addStretch(1)
+        self.enhance_btn = QPushButton("АВТОМАТИЧЕСКИ УЛУЧШИТЬ ЗВУК"); self.enhance_btn.setObjectName("Primary"); self.enhance_btn.setIcon(make_icon("sparkles", "#f3f6f8")); self.enhance_btn.setIconSize(QSize(24,24)); self.enhance_btn.setMinimumWidth(610); self.enhance_btn.setFixedHeight(46); self.enhance_btn.setEnabled(False); self.enhance_btn.clicked.connect(self.enhance); action_layout.addWidget(self.enhance_btn, 3)
+        action_layout.addStretch(1)
+        reset_btn = QPushButton("Сбросить всё"); reset_btn.setObjectName("GhostButton"); reset_btn.setIcon(make_icon("reset", "#bdc6cf")); reset_btn.setIconSize(QSize(17,17)); reset_btn.clicked.connect(lambda: self.apply_preset("Auto")); action_layout.addWidget(reset_btn)
+        layout.addWidget(action_panel)
+
+        # Export bar
+        export_panel = QFrame(); export_panel.setObjectName("ExportPanel"); export_panel.setFixedHeight(66)
+        export_layout = QHBoxLayout(export_panel); export_layout.setContentsMargins(14,10,14,10); export_layout.setSpacing(10)
+        export_icon = QLabel(); export_icon.setPixmap(make_icon("upload", "#eef3f6").pixmap(34,34)); export_icon.setFixedSize(40,40); export_layout.addWidget(export_icon)
+        export_text = QVBoxLayout(); export_text.setSpacing(1); et = QLabel("ЭКСПОРТИРОВАТЬ REEL"); et.setObjectName("ExportTitle"); es = QLabel("Сохранить обработанное видео на ПК"); es.setObjectName("Muted"); export_text.addWidget(et); export_text.addWidget(es); export_layout.addLayout(export_text,1)
+        self.format_combo = QComboBox(); self.format_combo.addItems(["MP4 (H.264)"]); export_layout.addWidget(self.format_combo)
+        self.quality_combo = QComboBox(); self.quality_combo.addItems(["Исходное качество"]); export_layout.addWidget(self.quality_combo)
+        self.export_btn = QPushButton("Экспорт"); self.export_btn.setObjectName("ExportButton"); self.export_btn.setIcon(make_icon("upload", "#1e252b")); self.export_btn.setIconSize(QSize(18,18)); self.export_btn.setEnabled(False); self.export_btn.clicked.connect(self.export_result); export_layout.addWidget(self.export_btn)
+        layout.addWidget(export_panel)
+
+        # Footer / progress
+        footer = QHBoxLayout(); footer.setSpacing(7)
+        self.status = QLabel("Готов к работе"); self.status.setObjectName("FooterText"); footer.addWidget(self.status)
+        self.progress = QProgressBar(); self.progress.setRange(0,0); self.progress.setFixedWidth(145); self.progress.setFixedHeight(5); self.progress.setTextVisible(False); self.progress.setVisible(False); footer.addWidget(self.progress)
+        footer.addStretch(1)
+        self.system_label = QLabel(); self.system_label.setObjectName("SystemStatus"); footer.addWidget(self.system_label)
+        footer.addWidget(QLabel("•  Локальная обработка  •  Без браузера")); layout.addLayout(footer)
+
+        self.setStyleSheet(self._style())
+        self._refresh_system_status(); self.apply_preset("Auto")
+        self._create_resize_handles()
+        QTimer.singleShot(0, self._finish_window_setup)
+
+    # ---- native window chrome / layout -------------------------------------------------
+    def _finish_window_setup(self):
+        self._system_backdrop_active = apply_windows_backdrop(int(self.winId()), acrylic=True)
+        self._reflow_cards()
+        self._sync_window_state()
+
+    def _create_resize_handles(self):
+        L, R, T, B = Qt.Edge.LeftEdge, Qt.Edge.RightEdge, Qt.Edge.TopEdge, Qt.Edge.BottomEdge
+        self._resize_handles = [
+            ResizeHandle(self,L,Qt.CursorShape.SizeHorCursor), ResizeHandle(self,R,Qt.CursorShape.SizeHorCursor),
+            ResizeHandle(self,T,Qt.CursorShape.SizeVerCursor), ResizeHandle(self,B,Qt.CursorShape.SizeVerCursor),
+            ResizeHandle(self,L|T,Qt.CursorShape.SizeFDiagCursor), ResizeHandle(self,R|T,Qt.CursorShape.SizeBDiagCursor),
+            ResizeHandle(self,L|B,Qt.CursorShape.SizeBDiagCursor), ResizeHandle(self,R|B,Qt.CursorShape.SizeFDiagCursor),
+        ]
+
+    def _position_resize_handles(self):
+        if not hasattr(self, "_resize_handles"): return
+        w,h,t = self.width(), self.height(), 6
+        geometries = [(0,t,t,h-2*t),(w-t,t,t,h-2*t),(t,0,w-2*t,t),(t,h-t,w-2*t,t),(0,0,t,t),(w-t,0,t,t),(0,h-t,t,t),(w-t,h-t,t,t)]
+        for handle, geo in zip(self._resize_handles, geometries):
+            handle.setGeometry(*geo); handle.setVisible(not self.isMaximized()); handle.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event); self._position_resize_handles(); self._reflow_cards()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            QTimer.singleShot(0, self._sync_window_state)
+
+    def _sync_window_state(self):
+        maximized = self.isMaximized()
+        # Borderless glass: the shell always reaches the native window edge.
+        # Resize handles are transparent overlays, so no visible outer gutter is needed.
+        self.window_layout.setContentsMargins(0, 0, 0, 0)
+        self.shell.setProperty("maximized", maximized)
+        self.shell.style().unpolish(self.shell); self.shell.style().polish(self.shell)
+        self.title_bar.max_btn.update(); self._position_resize_handles()
+
+    def toggle_maximize(self):
+        self.showNormal() if self.isMaximized() else self.showMaximized()
+        QTimer.singleShot(0, self._sync_window_state)
+
+    def _reflow_cards(self):
+        if not hasattr(self, "card_list"): return
+        width = self.cards_widget.width() or self.width()
+        cols = 6 if width >= 960 else 3
+        for card in self.card_list: self.cards_grid.removeWidget(card)
+        for i, card in enumerate(self.card_list): self.cards_grid.addWidget(card, i // cols, i % cols)
+        self.cards_widget.setFixedHeight(150 if cols == 6 else 308)
+
+    # ---- history / system --------------------------------------------------------------
+    def _save_recent(self, path: Path):
+        value = str(path.resolve())
+        self._recent = [value] + [x for x in self._recent if x != value and Path(x).exists()]
+        self._recent = self._recent[:8]
+        QSettings("ReelAudioStudio", "ReelAudioStudio").setValue("recent_files", self._recent)
+
+    def show_history_menu(self):
+        menu = QMenu(self); menu.setObjectName("GlassMenu")
+        valid = [p for p in self._recent if Path(p).exists()]
+        if not valid:
+            action = menu.addAction("История пока пуста"); action.setEnabled(False)
+        else:
+            for p in valid:
+                action = menu.addAction(make_icon("folder", "#c8d1d9"), Path(p).name)
+                action.setToolTip(p); action.triggered.connect(lambda checked=False, path=p: self.load_file(path))
+            menu.addSeparator(); clear = menu.addAction("Очистить историю"); clear.triggered.connect(self.clear_history)
+        menu.exec(self.history_btn.mapToGlobal(self.history_btn.rect().bottomLeft()))
+
+    def clear_history(self):
+        self._recent = []; QSettings("ReelAudioStudio", "ReelAudioStudio").setValue("recent_files", [])
+
+    def _refresh_system_status(self):
+        ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe"))
+        self.system_label.setText("● FFmpeg готов" if ready else "● FFmpeg не найден")
+        self.system_label.setProperty("ok", ready); self.system_label.style().unpolish(self.system_label); self.system_label.style().polish(self.system_label)
+
+    def show_system_info(self):
+        ff = find_executable("ffmpeg") or "не найден"; fp = find_executable("ffprobe") or "не найден"
+        df = "доступен" if deepfilter_available() else "не установлен"; vad = "доступен" if silero_available() else "не установлен"
+        QMessageBox.information(self,"Reel Audio Studio · Система",f"FFmpeg: {ff}\nFFprobe: {fp}\nDeepFilterNet: {df}\nSilero VAD: {vad}\n\nОбработка выполняется локально на ПК.")
+
+    # ---- media ------------------------------------------------------------------------
+    def open_file(self):
+        path, _ = QFileDialog.getOpenFileName(self,"Открыть Reel","","Media (*.mp4 *.mov *.mkv *.avi *.webm *.wav *.mp3 *.m4a *.flac *.aac);;Все файлы (*.*)")
+        if path: self.load_file(path)
+
+    def load_file(self, path: str):
+        p = Path(path)
+        if not p.exists() or p.suffix.lower() not in SUPPORTED:
+            QMessageBox.warning(self,"Файл не поддерживается","Выберите видео или аудиофайл поддерживаемого формата."); return
+        try: info = media_summary(p)
+        except Exception as exc: QMessageBox.critical(self,"Не удалось открыть файл",str(exc)); return
+        if not info["has_audio"]:
+            QMessageBox.warning(self,"Нет звука","В файле не найден аудиопоток."); return
+        self._last_info = info; self.player.stop(); self.input_path = p; self.processed_path = None; self._save_recent(p)
+        self.file_label.setText(p.name); self.file_hint.setText("Файл загружен  •  настройте обработку или выберите пресет")
+        self.media_name.setText(p.name)
+        meta = [self._fmt_ms(int(info["duration"]*1000))]; video=info.get("video") or {}; audio=info.get("audio") or {}
+        if video.get("width") and video.get("height"): meta.append(f"{video['width']}×{video['height']}")
+        if audio.get("codec_name"): meta.append(str(audio["codec_name"]).upper())
+        if audio.get("sample_rate"):
+            try: meta.append(f"{int(audio['sample_rate'])//1000} kHz")
+            except (TypeError,ValueError): pass
+        self.media_meta.setText("  •  ".join(meta)); self.player.setSource(QUrl.fromLocalFile(str(p.resolve())))
+        self.waveform.set_duration(int(info["duration"]*1000)); self.play_btn.setEnabled(True)
+        ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe")); self.enhance_btn.setEnabled(ready)
+        self.after_btn.setEnabled(False); self.export_btn.setEnabled(False); self.before_btn.setChecked(True); self.after_btn.setChecked(False)
+        self.status.setText("Строю waveform…"); self._load_waveform(str(p))
+
+    def _load_waveform(self, path: str):
+        if self.wave_thread and self.wave_thread.isRunning(): self.wave_thread.requestInterruption()
+        self.wave_thread = WaveformThread(path,self); self.wave_thread.done.connect(self._wave_ready); self.wave_thread.failed.connect(lambda e: self.status.setText(f"Waveform: {e}")); self.wave_thread.start()
+
+    def _wave_ready(self, peaks: list):
+        self.waveform.set_peaks(peaks); self.status.setText("Готов к обработке")
+
+    # ---- presets / processing ----------------------------------------------------------
+    def apply_preset(self, name: str):
+        presets = {"Auto":(70,60,50,True,True,-14),"Voice Clean":(58,55,48,False,True,-14),"Street / Car":(82,62,58,True,True,-14),"Natural":(28,30,32,False,True,-16),"Voice + Music":(38,42,40,False,True,-14),"Podcast":(48,52,46,True,True,-16)}
+        n,p,c,pauses,normalize,lufs = presets.get(name,presets["Auto"])
+        self.noise_card.set_value(n); self.presence_card.set_value(p); self.compression_card.set_value(c)
+        self.noise_card.toggle.setChecked(n>0); self.presence_card.toggle.setChecked(p>0); self.compression_card.toggle.setChecked(c>0)
+        self.pause_card.toggle.setChecked(pauses); self.normalize_card.toggle.setChecked(normalize); self.lufs.setCurrentText(f"{lufs} LUFS")
+        if name in self.preset_buttons: self.preset_buttons[name].setChecked(True)
+
+    def _settings(self) -> ProcessingSettings:
+        keep_ms = int(self.keep_pause.currentText().split()[0])
+        return ProcessingSettings(
+            preset=next((k for k,b in self.preset_buttons.items() if b.isChecked()),"Auto"),
+            noise_removal=self.noise_card.value() if self.noise_card.toggle.isChecked() else 0,
+            voice_presence=self.presence_card.value() if self.presence_card.toggle.isChecked() else 0,
+            compression=self.compression_card.value() if self.compression_card.toggle.isChecked() else 0,
+            remove_pauses=self.pause_card.toggle.isChecked(), keep_pause_seconds=keep_ms/1000.0,
+            target_lufs=float(self.lufs.currentText().split()[0]), auto_normalize=self.normalize_card.toggle.isChecked(),
+            ai_deepfilter=self.deepfilter.isChecked(), ai_vad=self.ai_vad.isChecked(),
+        )
+
+    def enhance(self):
+        if not self.input_path: return
+        try: info = media_summary(self.input_path)
+        except Exception as exc: QMessageBox.critical(self,"Ошибка",str(exc)); return
+        suffix = ".mp4" if info["has_video"] else ".m4a"; preview = self._temp_root / f"preview_{uuid.uuid4().hex}{suffix}"
+        self._set_busy(True); self.processing_thread = ProcessingThread(str(self.input_path),str(preview),self._settings(),self)
+        self.processing_thread.stage.connect(self.status.setText); self.processing_thread.done.connect(self._process_done); self.processing_thread.failed.connect(self._process_failed); self.processing_thread.start()
+
+    def _set_busy(self, busy: bool):
+        self.progress.setVisible(busy); self.enhance_btn.setEnabled(not busy and self.input_path is not None); self.export_btn.setEnabled(not busy and self.processed_path is not None)
+
+    def _process_done(self, path: str):
+        self.processed_path = Path(path); self.after_btn.setEnabled(True); self.export_btn.setEnabled(True); self._set_busy(False); self.status.setText("Готово  •  сравните До / После"); self.switch_source(True)
+
+    def _process_failed(self, error: str):
+        self._set_busy(False); self.status.setText("Ошибка обработки"); QMessageBox.critical(self,"Ошибка обработки",error)
+
+    def switch_source(self, after: bool):
+        source = self.processed_path if after else self.input_path
+        if not source: return
+        was_playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        self.player.stop(); self.player.setSource(QUrl.fromLocalFile(str(source.resolve()))); self.before_btn.setChecked(not after); self.after_btn.setChecked(after)
+        if was_playing: self.player.play()
+        self._load_waveform(str(source))
+
+    def toggle_play(self):
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState: self.player.pause()
+        else: self.player.play()
+
+    def _on_playback_state(self, state):
+        name = "pause" if state == QMediaPlayer.PlaybackState.PlayingState else "play"
+        self.play_btn.setIcon(make_icon(name,"#f1f5f8")); self.play_btn.setIconSize(QSize(22,22))
+
+    def _on_duration(self, duration: int):
+        self.timeline.setRange(0,max(0,duration)); self._update_time(self.player.position(),duration); self.waveform.set_duration(duration)
+
+    def _on_position(self, pos: int):
+        if not self._seeking: self.timeline.setValue(pos)
+        duration=self.player.duration(); self._update_time(pos,duration); self.waveform.set_progress((pos/duration) if duration>0 else 0.0)
+
+    def _seek_release(self):
+        self._seeking=False; self.player.setPosition(self.timeline.value())
+
+    def _update_time(self, pos: int, duration: int): self.time_label.setText(f"{self._fmt_ms(pos)} / {self._fmt_ms(duration)}")
+
+    @staticmethod
+    def _fmt_ms(ms: int) -> str:
+        sec=max(0,ms//1000); return f"{sec//60:02d}:{sec%60:02d}"
+
+    def export_result(self):
+        if not self.processed_path: return
+        default="enhanced_reel.mp4" if self.processed_path.suffix.lower()==".mp4" else "enhanced_audio.m4a"
+        path,_=QFileDialog.getSaveFileName(self,"Экспорт",default,"MP4 (*.mp4);;M4A (*.m4a);;Все файлы (*.*)")
+        if not path: return
+        try: shutil.copy2(self.processed_path,path); self.status.setText(f"Экспортировано: {Path(path).name}")
+        except Exception as exc: QMessageBox.critical(self,"Ошибка экспорта",str(exc))
+
+    def closeEvent(self, event):
+        self.player.stop(); shutil.rmtree(self._temp_root,ignore_errors=True); super().closeEvent(event)
+
+    @staticmethod
+    def _style() -> str:
+        return r"""
+        QWidget { background: transparent; color: #eaf0f5; font-family: 'Segoe UI'; font-size: 12px; }
+        QWidget#TransparentRoot { background: transparent; }
+        QFrame#GlassShell {
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(54,66,78,154), stop:0.52 rgba(35,44,53,142), stop:1 rgba(25,33,40,158));
+            border: 1px solid rgba(203,216,228,58); border-radius: 16px;
+        }
+        QFrame#GlassShell[maximized="true"] { border-radius: 0px; border: none; }
+        QWidget#TitleBar { background: rgba(26,34,42,34); border-top-left-radius: 16px; border-top-right-radius: 16px; }
+        QLabel#Title { color:#f1f5f8; font-size:18px; font-weight:700; letter-spacing:2px; }
+        QLabel#Subtitle { color:#8f9aa5; font-size:10px; font-weight:500; letter-spacing:1px; }
+        QLabel#FileLabel, QLabel#MediaName { color:#eef3f7; font-size:13px; font-weight:650; }
+        QLabel#Muted, QLabel#FooterText { color:#909ba6; font-size:11px; }
+        QLabel#TimeLabel { color:#aeb8c2; padding-left:8px; }
+        QLabel#CardTitle { color:#f0f4f7; font-size:12px; font-weight:700; }
+        QLabel#CardDescription { color:#97a2ac; font-size:10px; }
+        QLabel#ValueLabel { color:#dce3e8; font-weight:650; }
+        QLabel#ExportTitle { color:#f2f5f7; font-size:14px; font-weight:750; letter-spacing:1px; }
+        QLabel#SystemStatus[ok="true"] { color:#bac5ce; font-weight:650; }
+        QLabel#SystemStatus[ok="false"] { color:#dc9696; font-weight:650; }
+
+        QFrame#DropFrame, QFrame#Panel, QFrame#SettingCard, QFrame#ActionPanel, QFrame#ExportPanel {
+            background: rgba(36,46,56,76); border:1px solid rgba(214,225,235,48); border-radius:12px;
+        }
+        QFrame#DropFrame:hover { background: rgba(55,68,80,94); border-color:rgba(220,230,238,76); }
+        QFrame#Panel { background: rgba(18,26,34,72); }
+        QFrame#SettingCard { background: rgba(49,60,70,82); }
+        QFrame#ActionPanel { background: rgba(20,28,35,52); }
+        QFrame#ExportPanel { background: rgba(103,116,128,78); }
+
+        QPushButton { background:rgba(73,86,98,72); border:1px solid rgba(204,216,226,42); border-radius:8px; color:#e6ecf1; padding:7px 11px; font-weight:600; }
+        QPushButton:hover { background:rgba(105,119,132,102); border-color:rgba(220,229,237,70); }
+        QPushButton:pressed { background:rgba(52,63,73,118); }
+        QPushButton:disabled { color:#69747e; background:rgba(44,51,58,82); border-color:rgba(150,160,170,22); }
+        QPushButton#TitleGhostButton { background:transparent; border:1px solid transparent; color:#aeb8c1; padding:7px 10px; }
+        QPushButton#TitleGhostButton:hover { background:rgba(255,255,255,12); border-color:rgba(255,255,255,18); }
+        QPushButton#SecondaryButton { min-height:34px; min-width:118px; }
+        QPushButton#PresetButton { text-align:left; background:rgba(40,50,60,70); border:1px solid rgba(194,207,219,37); border-radius:9px; color:#b9c3cc; padding:8px 11px; font-size:10px; }
+        QPushButton#PresetButton:checked { background:rgba(235,240,244,232); border-color:rgba(255,255,255,240); color:#273038; }
+        QPushButton#CompareButton { min-width:118px; background:rgba(43,54,64,62); color:#99a4ae; padding:7px 12px; }
+        QPushButton#CompareButton:checked { background:rgba(94,106,117,152); color:#f2f5f7; border-color:rgba(213,224,233,67); }
+        QPushButton#SquareButton, QPushButton#TransportButton { min-width:0; padding:0; background:rgba(55,64,73,80); }
+        QPushButton#TransportButton { border:none; width:34px; height:34px; }
+        QPushButton#PlayButton { border-radius:23px; padding:0; background:rgba(121,133,144,128); border-color:rgba(225,233,239,52); }
+        QPushButton#Primary { background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(118,131,143,210), stop:1 rgba(69,80,90,218)); border:1px solid rgba(225,234,241,104); border-radius:13px; color:#fff; font-size:13px; font-weight:800; letter-spacing:1px; }
+        QPushButton#Primary:hover { background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(135,148,160,225), stop:1 rgba(79,91,102,228)); }
+        QPushButton#GhostButton { background:rgba(52,61,69,62); color:#acb6c0; }
+        QPushButton#ExportButton { background:rgba(239,243,246,235); color:#20282f; border-color:rgba(255,255,255,238); font-weight:800; min-width:104px; }
+        QPushButton#ExportButton:hover { background:#ffffff; }
+        QPushButton#ChipButton { padding:4px 6px; border-radius:6px; font-size:9px; color:#aeb8c1; }
+        QPushButton#ChipButton:checked { background:rgba(210,220,228,190); color:#29323a; }
+
+        QComboBox { background:rgba(42,53,63,78); border:1px solid rgba(199,211,222,40); border-radius:7px; color:#dbe2e8; padding:6px 9px; min-width:108px; }
+        QComboBox:hover { border-color:rgba(218,227,235,68); }
+        QComboBox::drop-down { border:none; width:20px; }
+        QComboBox QAbstractItemView { background:#283139; border:1px solid #4d5963; selection-background-color:#53616d; color:#edf2f5; }
+        QComboBox#CompactCombo { min-width:76px; max-width:86px; }
+        QComboBox#CardCombo { min-width:70px; padding:5px 7px; font-size:10px; }
+
+        /* Sliders are custom-painted by GlassSlider to avoid native/QSS fill artifacts. */
+
+        QProgressBar { background:rgba(96,106,115,55); border:none; border-radius:2px; }
+        QProgressBar::chunk { background:rgba(210,220,228,170); border-radius:2px; }
+        QMenu#GlassMenu { background:rgba(37,45,52,245); border:1px solid #53606b; border-radius:8px; padding:6px; }
+        QMenu#GlassMenu::item { padding:7px 18px 7px 9px; border-radius:5px; }
+        QMenu#GlassMenu::item:selected { background:rgba(96,111,124,130); }
+        QToolTip { background:#313b44; color:#ecf1f5; border:1px solid #596671; padding:5px; }
+        """

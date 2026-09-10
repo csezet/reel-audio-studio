@@ -1,0 +1,3 @@
+# Optional AI modules. Install only if you need them.
+deepfilternet
+silero-vad

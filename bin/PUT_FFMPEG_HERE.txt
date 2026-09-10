@@ -1,0 +1,5 @@
+For a self-contained Windows build place these files here before running build_windows.bat:
+- ffmpeg.exe
+- ffprobe.exe
+
+The app can also use FFmpeg/ffprobe from the Windows PATH.
