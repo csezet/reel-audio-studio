@@ -24,13 +24,13 @@ def _win_build() -> int:
         return 0
 
 
-def apply_windows_backdrop(hwnd: int, acrylic: bool = True) -> bool:
-    """Request a full-window DWM material on supported Windows versions.
+def apply_windows_backdrop(hwnd: int, acrylic: bool = True, material: bool = True) -> bool:
+    """Apply optional DWM chrome/material on supported Windows versions.
 
-    Windows 11 22H2+ gets the official system backdrop API.  We also extend the
-    DWM frame across the full client area so a frameless Qt window can expose the
-    material through transparent pixels.  Older Windows keeps Qt alpha
-    transparency as a safe fallback (no undocumented composition API here).
+    With ``material=False`` only non-painting chrome hints (dark mode, rounded
+    corner preference and no native border color) are requested.  Crucially, the
+    DWM frame is not extended and Acrylic/Mica is not applied, so Qt alpha-zero
+    regions can remain visually transparent.
     """
     if sys.platform != "win32" or not hwnd:
         return False
@@ -45,9 +45,12 @@ def apply_windows_backdrop(hwnd: int, acrylic: bool = True) -> bool:
         extend_frame.argtypes = [wintypes.HWND, ctypes.POINTER(_MARGINS)]
         extend_frame.restype = ctypes.c_long
 
-        # Make the complete client area eligible for DWM composition/material.
-        margins = _MARGINS(-1, -1, -1, -1)
-        extend_frame(hwnd, ctypes.byref(margins))
+        # Full-window DWM composition/material is optional.  For the
+        # TrueTransparent UI we intentionally do NOT extend the DWM frame: doing
+        # so paints Acrylic/Mica into pixels that Qt otherwise leaves transparent.
+        if material:
+            margins = _MARGINS(-1, -1, -1, -1)
+            extend_frame(hwnd, ctypes.byref(margins))
 
         # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
         dark = ctypes.c_int(1)
@@ -64,10 +67,12 @@ def apply_windows_backdrop(hwnd: int, acrylic: bool = True) -> bool:
         # DWMWA_SYSTEMBACKDROP_TYPE = 38 (Windows 11 build 22621+)
         # 3 = DWMSBT_TRANSIENTWINDOW -> Desktop Acrylic
         # 2 = DWMSBT_MAINWINDOW      -> Mica
-        if _win_build() >= 22621:
+        if material and _win_build() >= 22621:
             backdrop = ctypes.c_int(3 if acrylic else 2)
             hr = set_attr(hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop))
             return hr >= 0
+        # Chrome attributes were applied, but no full-window material was requested.
+        return False
     except Exception:
         return False
     return False

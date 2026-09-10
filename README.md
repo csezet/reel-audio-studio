@@ -1,13 +1,13 @@
-# 🎙️ Reel Audio Studio — Glass UI Borderless
+# 🎙️ Reel Audio Studio — Glass UI v6 True Transparent
 
 <p align="center">
   <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
-  Построено на <b>Qt Widgets / PySide6</b> с безрамочным стеклянным интерфейсом (Desktop Acrylic). Никакого браузера, Electron или WebView.
+  Построено на <b>Qt Widgets / PySide6</b> с безрамочным полностью прозрачным интерфейсом (True Transparent). Никакого браузера, Electron или WebView.
 </p>
 
 <p align="center">
-  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.0.0/ReelAudioStudio_GlassUI_v5_Borderless.zip">
-    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.0.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.1.0/ReelAudioStudio_GlassUI_v6_TrueTransparent.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.1.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
@@ -31,11 +31,12 @@
 ## ✨ Возможности
 
 - **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
-- **Интерфейс Glass UI v5**:
-  - Безрамочный дизайн (frameless) с поддержкой системного размытия **Windows 11 Desktop Acrylic** (`DWMWA_SYSTEMBACKDROP_TYPE`).
-  - Кастомный заголовок окна со стандартными кнопками (свернуть, развернуть, закрыть), поддержкой разворачивания по двойному клику и перетаскивания.
+- **Интерфейс Glass UI v6 (True Transparent)**:
+  - Полностью прозрачная основа окна (убраны фоновые подложки и серые рамки).
+  - Полупрозрачные стильные карточки управления, слайдеры и заголовок.
+  - Кастомный заголовок окна со стандартными кнопками (свернуть, развернуть, закрыть), поддержкой разворачивания по двойному клику и плавного перетаскивания.
   - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
-  - Плавное изменение размера окна по невидимым системным границам (6 px).
+  - Плавное изменение размера окна по системным границам.
   - История недавних файлов (Recent Files).
 - **Превью и контроль звука**:
   - Интерактивная визуализация аудиоволны (Waveform) со шкалой времени и курсором воспроизведения.

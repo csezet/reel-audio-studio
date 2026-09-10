@@ -396,7 +396,7 @@ class MainWindow(QMainWindow):
         self.shell = QFrame(); self.shell.setObjectName("GlassShell")
         self.window_layout.addWidget(self.shell)
 
-        shell_layout = QVBoxLayout(self.shell); shell_layout.setContentsMargins(0, 0, 0, 10); shell_layout.setSpacing(0)
+        shell_layout = QVBoxLayout(self.shell); shell_layout.setContentsMargins(0, 0, 0, 0); shell_layout.setSpacing(0)
         self.title_bar = TitleBar(self); shell_layout.addWidget(self.title_bar)
 
         body = QWidget(); body.setObjectName("Body")
@@ -515,7 +515,7 @@ class MainWindow(QMainWindow):
 
     # ---- native window chrome / layout -------------------------------------------------
     def _finish_window_setup(self):
-        self._system_backdrop_active = apply_windows_backdrop(int(self.winId()), acrylic=True)
+        self._system_backdrop_active = apply_windows_backdrop(int(self.winId()), acrylic=True, material=False)
         self._reflow_cards()
         self._sync_window_state()
 
@@ -717,12 +717,17 @@ class MainWindow(QMainWindow):
         return r"""
         QWidget { background: transparent; color: #eaf0f5; font-family: 'Segoe UI'; font-size: 12px; }
         QWidget#TransparentRoot { background: transparent; }
+        /* v6: no full-window plate.  The native window itself is truly transparent;
+           only functional panels/cards below paint translucent surfaces. */
         QFrame#GlassShell {
-            background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(54,66,78,154), stop:0.52 rgba(35,44,53,142), stop:1 rgba(25,33,40,158));
-            border: 1px solid rgba(203,216,228,58); border-radius: 16px;
+            background: transparent;
+            border: none;
+            border-radius: 0px;
         }
-        QFrame#GlassShell[maximized="true"] { border-radius: 0px; border: none; }
-        QWidget#TitleBar { background: rgba(26,34,42,34); border-top-left-radius: 16px; border-top-right-radius: 16px; }
+        QFrame#GlassShell[maximized="true"] { background: transparent; border: none; border-radius: 0px; }
+        /* A practically invisible alpha value keeps the draggable title-bar hit area
+           reliable without drawing a visible full-window background. */
+        QWidget#TitleBar { background: rgba(0, 0, 0, 1); border: none; }
         QLabel#Title { color:#f1f5f8; font-size:18px; font-weight:700; letter-spacing:2px; }
         QLabel#Subtitle { color:#8f9aa5; font-size:10px; font-weight:500; letter-spacing:1px; }
         QLabel#FileLabel, QLabel#MediaName { color:#eef3f7; font-size:13px; font-weight:650; }
