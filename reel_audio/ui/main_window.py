@@ -90,12 +90,12 @@ class GlassShell(QFrame):
         # Soft glass: only a small amount of the desktop should show through.
         # Keep opacity on the background plate itself (rather than windowOpacity)
         # so text, icons and controls remain fully crisp and opaque.
-        # v10: denser glass.  Keep only a subtle hint of the desktop visible.
+        # v16: slightly denser glass. Keep only a very faint hint of the desktop visible.
         # Alpha is intentionally changed only on the background plate, not on
         # the entire window, so text/icons/controls stay fully opaque and crisp.
-        gradient.setColorAt(0.0, QColor(55, 66, 77, 246))
-        gradient.setColorAt(0.52, QColor(37, 46, 55, 243))
-        gradient.setColorAt(1.0, QColor(27, 35, 42, 245))
+        gradient.setColorAt(0.0, QColor(55, 66, 77, 250))
+        gradient.setColorAt(0.52, QColor(37, 46, 55, 249))
+        gradient.setColorAt(1.0, QColor(27, 35, 42, 250))
         painter.fillPath(path, gradient)
 
         if not maximized:

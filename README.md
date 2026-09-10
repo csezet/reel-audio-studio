@@ -1,13 +1,13 @@
-# 🎙️ Reel Audio Studio — Glass UI v15 (Clickable Plus)
+# 🎙️ Reel Audio Studio — Glass UI v16 (Denser Glass)
 
 <p align="center">
   <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
-  Построено на <b>Qt Widgets / PySide6</b> со скруглённым стеклянным интерфейсом, быстрым добавлением файлов и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
+  Построено на <b>Qt Widgets / PySide6</b> с благородным стеклянным интерфейсом (Denser Glass), быстрым добавлением файлов и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
 </p>
 
 <p align="center">
-  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.6.0/ReelAudioStudio_GlassUI_v15_ClickablePlus.zip">
-    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.6.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.7.0/ReelAudioStudio_GlassUI_v16_DenserGlass.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.7.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
@@ -32,10 +32,11 @@
 ## ✨ Возможности
 
 - **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
-- **Интерфейс Glass UI v15 (Clickable Plus & Animations)**:
-  - **Кликабельная плитка «+»**: большая кнопка «+» в зоне Drag & Drop теперь интерактивна — клик по ней открывает проводник для выбора файла.
-  - **Кнопка «Убрать файл»**: позволяет мгновенно открепить выбранное медиа и очистить рабочую область без удаления исходного файла с диска.
-  - **AnimatedPrimaryButton**: кнопка Auto Enhance плавно анимируется при наведении даже до загрузки файла, а при клике без файла мягко подсказывает действие.
+- **Интерфейс Glass UI v16 (Denser Glass)**:
+  - **Идеальный баланс плотности стекла**: градиент фона скорректирован до ~98% непрозрачности (значения альфа 250/249/250) — рабочий стол не отвлекает, а интерфейс выглядит монолитным, стильным и кристально чётким.
+  - **Кликабельная плитка «+»**: большая кнопка «+» в зоне Drag & Drop открывает проводник для выбора файла в один клик.
+  - **Кнопка «Убрать файл»**: позволяет мгновенно открепить выбранное медиа и сбросить рабочую область без удаления файла с диска.
+  - **AnimatedPrimaryButton**: главная кнопка Auto Enhance плавно анимируется при наведении и подсказывает действие.
   - **Скруглённые кнопки заголовка**: кнопки управления окном (свернуть, развернуть, закрыть) с мягкой 125 мс hover-анимацией (OutCubic).
   - **Встроенная асинхронная установка нейросетей**: установка **DeepFilterNet** и **Silero VAD** в 1 клик прямо из настроек с индикатором прогресса.
   - **GlassComboBox**: кастомный выпадающий список экспорта без системных артефактов фокуса.
@@ -43,7 +44,7 @@
   - Анимированное переключение тумблеров (`QPropertyAnimation` OutCubic).
   - Встроенное стеклянное модальное окно настроек (Settings Dialog).
   - Лаконичный футер с авторским тегом `csezet`.
-  - Комфортная плотность фона (90–93%) и нативные плавные анимации окна Windows 11 (DWM).
+  - Нативные плавные анимации окна Windows 11 (DWM).
   - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
   - История недавних файлов (Recent Files).
 - **Превью и контроль звука**:
