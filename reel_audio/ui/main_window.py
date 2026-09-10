@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QIcon, QMouseEvent, QPainter, QPalette, QPen
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -35,10 +35,59 @@ from reel_audio.engine.tools import find_executable, media_summary
 from reel_audio.engine.vad import silero_available
 from .vector_icons import draw_vector_icon, make_icon, make_state_icon
 from .waveform_widget import WaveformWidget
-from .windows_effects import apply_windows_backdrop
+from .windows_effects import (
+    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+    apply_windows_backdrop, enable_native_window_animations,
+    is_nccalcsize_message, show_window_native,
+)
 from .workers import ProcessingThread, WaveformThread
 
 SUPPORTED = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac", ".aac"}
+
+
+
+
+class GlassShell(QFrame):
+    """The single translucent window plate, painted strictly inside its own rect.
+
+    The top-level window remains alpha-transparent.  This widget paints the
+    semi-transparent grey glass surface with a rounded QPainterPath, so no
+    shadow, margin or backdrop can extend past the native window bounds.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("GlassShell")
+        self.setAutoFillBackground(False)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        maximized = bool(self.property("maximized"))
+        radius = 0.0 if maximized else 16.0
+        # Keep antialiased border fully inside the widget rectangle.
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        if radius > 0:
+            path.addRoundedRect(rect, radius, radius)
+        else:
+            path.addRect(rect)
+
+        painter.setClipPath(path)
+        gradient = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
+        # Semi-transparent grey glass: the desktop remains visible through it,
+        # but the entire application keeps one coherent background plate.
+        gradient.setColorAt(0.0, QColor(55, 66, 77, 184))
+        gradient.setColorAt(0.52, QColor(37, 46, 55, 172))
+        gradient.setColorAt(1.0, QColor(27, 35, 42, 180))
+        painter.fillPath(path, gradient)
+
+        if not maximized:
+            painter.setClipping(False)
+            painter.setPen(QPen(QColor(213, 224, 233, 62), 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
 
 
 class ToggleSwitch(QAbstractButton):
@@ -260,7 +309,7 @@ class TitleBar(QWidget):
         self.min_btn = CaptionButton("min")
         self.max_btn = CaptionButton("max")
         self.close_btn = CaptionButton("close")
-        self.min_btn.clicked.connect(window.showMinimized)
+        self.min_btn.clicked.connect(window.minimize_window)
         self.max_btn.clicked.connect(window.toggle_maximize)
         self.close_btn.clicked.connect(window.close)
         controls.addWidget(self.min_btn); controls.addWidget(self.max_btn); controls.addWidget(self.close_btn)
@@ -393,7 +442,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.window_layout = QVBoxLayout(central); self.window_layout.setContentsMargins(0, 0, 0, 0); self.window_layout.setSpacing(0)
 
-        self.shell = QFrame(); self.shell.setObjectName("GlassShell")
+        self.shell = GlassShell()
         self.window_layout.addWidget(self.shell)
 
         shell_layout = QVBoxLayout(self.shell); shell_layout.setContentsMargins(0, 0, 0, 0); shell_layout.setSpacing(0)
@@ -511,6 +560,10 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(self._style())
         self._refresh_system_status(); self.apply_preset("Auto")
         self._create_resize_handles()
+        # Realize the HWND while the window is still hidden, then restore the Win32
+        # caption/resizable style bits. DWM sees a normal app window from its first
+        # visible frame, so opening/minimize/restore use the native shell animation.
+        self._native_animation_ready = enable_native_window_animations(int(self.winId()))
         QTimer.singleShot(0, self._finish_window_setup)
 
     # ---- native window chrome / layout -------------------------------------------------
@@ -549,12 +602,27 @@ class MainWindow(QMainWindow):
         # Resize handles are transparent overlays, so no visible outer gutter is needed.
         self.window_layout.setContentsMargins(0, 0, 0, 0)
         self.shell.setProperty("maximized", maximized)
-        self.shell.style().unpolish(self.shell); self.shell.style().polish(self.shell)
+        self.shell.update()
         self.title_bar.max_btn.update(); self._position_resize_handles()
 
+    def minimize_window(self):
+        """Minimize through the Windows shell so DWM owns the taskbar transition."""
+        if not show_window_native(int(self.winId()), SW_MINIMIZE):
+            self.showMinimized()
+
     def toggle_maximize(self):
-        self.showNormal() if self.isMaximized() else self.showMaximized()
+        command = SW_RESTORE if self.isMaximized() else SW_MAXIMIZE
+        if not show_window_native(int(self.winId()), command):
+            self.showNormal() if self.isMaximized() else self.showMaximized()
         QTimer.singleShot(0, self._sync_window_state)
+
+    def nativeEvent(self, eventType, message):
+        # Windows must retain WS_CAPTION/WS_THICKFRAME for native taskbar/DWM
+        # animations, Snap and shell semantics. Returning 0 for WM_NCCALCSIZE
+        # expands our Qt client area over that native frame, so it stays invisible.
+        if is_nccalcsize_message(eventType, message):
+            return True, 0
+        return super().nativeEvent(eventType, message)
 
     def _reflow_cards(self):
         if not hasattr(self, "card_list"): return
@@ -719,15 +787,11 @@ class MainWindow(QMainWindow):
         QWidget#TransparentRoot { background: transparent; }
         /* v6: no full-window plate.  The native window itself is truly transparent;
            only functional panels/cards below paint translucent surfaces. */
-        QFrame#GlassShell {
-            background: transparent;
-            border: none;
-            border-radius: 0px;
-        }
-        QFrame#GlassShell[maximized="true"] { background: transparent; border: none; border-radius: 0px; }
-        /* A practically invisible alpha value keeps the draggable title-bar hit area
-           reliable without drawing a visible full-window background. */
-        QWidget#TitleBar { background: rgba(0, 0, 0, 1); border: none; }
+        /* The full-window glass plate is custom-painted by GlassShell.
+           Keeping QSS transparent here prevents a second rectangular layer. */
+        QFrame#GlassShell { background: transparent; border: none; }
+        QFrame#GlassShell[maximized="true"] { background: transparent; border: none; }
+        QWidget#TitleBar { background: transparent; border: none; }
         QLabel#Title { color:#f1f5f8; font-size:18px; font-weight:700; letter-spacing:2px; }
         QLabel#Subtitle { color:#8f9aa5; font-size:10px; font-weight:500; letter-spacing:1px; }
         QLabel#FileLabel, QLabel#MediaName { color:#eef3f7; font-size:13px; font-weight:650; }
