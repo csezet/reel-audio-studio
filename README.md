@@ -1,143 +1,188 @@
-# Reel Audio Studio — Glass UI v5 Borderless
+# 🎙️ Reel Audio Studio — Glass UI Borderless
 
-**v5 visual fix:** removed the 10 px transparent outer gutter and the Qt drop-shadow that combined into a thick grey frame around the app. The glass shell now reaches the actual frameless window edge; resizing still works through invisible 6 px system-resize hit zones.
+<p align="center">
+  <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
+  Построено на <b>Qt Widgets / PySide6</b> с безрамочным стеклянным интерфейсом (Desktop Acrylic). Никакого браузера, Electron или WebView.
+</p>
 
-Native Windows/PC desktop application for local audio enhancement of Reels/Shorts. The UI uses **Qt Widgets / PySide6**, not a browser, Electron or WebView UI.
+<p align="center">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.0.0/ReelAudioStudio_GlassUI_v5_Borderless.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.0.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20РЕПОЗИТОРИЙ-ZIP%20Архив-0969da?style=for-the-badge&logo=github&logoColor=white" alt="Скачать исходный код" height="42">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/csezet/reel-audio-studio/releases/latest">
+    <img src="https://img.shields.io/badge/СТРАНИЦА%20РЕЛИЗОВ-GitHub%20Releases-6e5494?style=for-the-badge&logo=git&logoColor=white" alt="Страница релизов" height="42">
+  </a>
+</p>
 
-The current interface is a **frameless semi-transparent gray desktop redesign** based on the supplied reference: custom Windows-style caption buttons, rounded glass shell, translucent processing cards, responsive six-card layout, vector line icons, waveform workspace, Auto Enhance action, and a dedicated export panel.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/GUI-PySide6%20(Qt%206)-41CD52?style=flat&logo=qt&logoColor=white" alt="PySide6">
+  <img src="https://img.shields.io/badge/Платформа-Windows%2010%20%2F%2011-0078D6?style=flat&logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/Движок-FFmpeg-007808?style=flat&logo=ffmpeg&logoColor=white" alt="FFmpeg">
+</p>
 
-## What works in this MVP
+---
 
-- Open MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC and AAC.
-- Native drag & drop and Windows file dialogs.
-- Custom frameless title bar with working minimize, maximize/restore, close, double-click maximize, native system move and edge/corner resize.
-- On Windows 11 22H2+ the app requests the official DWM **Desktop Acrylic** system backdrop; older Windows versions keep a Qt semi-transparent matte fallback.
-- Persistent Recent Files menu.
-- Consistent programmatically drawn vector icons, including the EXE/taskbar app icon.
-- Local waveform preview with playback cursor and Before/After playback.
-- FFmpeg-based high-pass filtering, FFT noise reduction, voice-presence EQ, compression, optional EBU R128 loudness normalization and limiting.
-- Optional removal of long pauses while cutting **video and audio together**, so sync is preserved.
-- Optional **DeepFilterNet** speech enhancement when its CLI is installed.
-- Optional **Silero VAD** speech detection for smarter pause removal when the package is installed.
-- Export enhanced video to MP4 or audio to M4A.
+## ✨ Возможности
 
-## 1. Install FFmpeg
+- **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
+- **Интерфейс Glass UI v5**:
+  - Безрамочный дизайн (frameless) с поддержкой системного размытия **Windows 11 Desktop Acrylic** (`DWMWA_SYSTEMBACKDROP_TYPE`).
+  - Кастомный заголовок окна со стандартными кнопками (свернуть, развернуть, закрыть), поддержкой разворачивания по двойному клику и перетаскивания.
+  - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
+  - Плавное изменение размера окна по невидимым системным границам (6 px).
+  - История недавних файлов (Recent Files).
+- **Превью и контроль звука**:
+  - Интерактивная визуализация аудиоволны (Waveform) со шкалой времени и курсором воспроизведения.
+  - Переключение **До / После** (Before / After) в реальном времени.
+- **Студийная цепочка обработки (FFmpeg)**:
+  - Срез инфранизкого гула (Highpass 70 Гц).
+  - Интеллектуальное спектральное шумоподавление FFT (`afftdn`).
+  - Эквалайзер присутствия голоса (Voice Presence EQ ~3 кГц) для чёткости речи.
+  - Мягкая динамическая компрессия (`acompressor`).
+  - Нормализация громкости по стандарту EBU R128 (`loudnorm`: выбор -16, -14, -12 LUFS).
+  - Пиковый лимитер (`alimiter`).
+- **Синхронное удаление пауз**:
+  - Автоматическое нахождение тишины и вырезание пауз **одновременно из видео и аудио** (синхронизация губ и таймлайн видео сохраняются идеально).
+- **Опциональные нейросетевые модули (AI)**:
+  - **DeepFilterNet** — удаление шумов через модель глубокого обучения.
+  - **Silero VAD** — нейросетевой детектор голосовой активности для хирургически точного определения пауз.
+- **Экспорт**: сохранение готового видео в MP4 или аудиодорожки в M4A.
 
-The program needs `ffmpeg` and `ffprobe`.
+---
 
-Either:
+## 🚀 Быстрый старт
 
-1. Install FFmpeg and add both executables to Windows PATH, or
-2. Put `ffmpeg.exe` and `ffprobe.exe` in the project's `bin` folder.
+### 1. Скачивание
+Нажмите большую зелёную кнопку **[Скачать ZIP (v1.0.0)](https://github.com/csezet/reel-audio-studio/releases/download/v1.0.0/ReelAudioStudio_GlassUI_v5_Borderless.zip)** вверху страницы и распакуйте архив в удобное место на вашем ПК.
 
-The source archive intentionally does **not** include third-party FFmpeg binaries.
+### 2. FFmpeg
+Приложению требуются `ffmpeg.exe` и `ffprobe.exe`.
 
-## 2. Run on Windows
+- Если FFmpeg уже установлен в вашей системе и прописан в PATH — приложение подхватит его автоматически.
+- Либо просто скопируйте файлы `ffmpeg.exe` и `ffprobe.exe` в папку `bin/` внутри проекта.
 
-Double-click:
+### 3. Запуск в 1 клик
+Дважды щёлкните по файлу:
 
 ```bat
 run_windows.bat
 ```
 
-It creates a local `.venv`, installs PySide6 and starts the desktop application.
+Скрипт автоматически:
+1. Создаст локальное виртуальное окружение `.venv` (Python 3.10 / 3.11).
+2. Установит необходимые библиотеки из `requirements.txt` (PySide6).
+3. Запустит графический интерфейс приложения.
 
-Manual launch:
+---
+
+## 🛠️ Ручной запуск через консоль
+
+Если вы предпочитаете запускать через командную строку:
 
 ```bat
-py -3 -m venv .venv
+# Создание виртуального окружения
+py -3.11 -m venv .venv
+
+# Активация окружения
 .venv\Scripts\activate
+
+# Установка зависимостей
 pip install -r requirements.txt
+
+# Запуск приложения
 python main.py
 ```
 
-## 3. Optional AI
+---
 
-After the base app runs:
+## 🧠 Дополнительные AI-модули (опционально)
+
+По умолчанию удаление шума работает через встроенный быстрый фильтр FFmpeg `afftdn`, а поиск пауз — через `silencedetect`.
+
+Если вам требуется нейросетевая обработка голоса (**DeepFilterNet**) и нейросетевой детектор пауз (**Silero VAD**), запустите:
 
 ```bat
 install_ai_windows.bat
 ```
 
-or manually:
+Или вручную в активированном окружении:
 
 ```bat
 pip install -r requirements-ai.txt
 ```
 
-DeepFilterNet is deliberately optional because it adds a much heavier PyTorch/model dependency. Without it, Noise Removal still works using FFmpeg `afftdn`.
+---
 
-If Silero is not installed, pause detection automatically falls back to FFmpeg `silencedetect`.
+## 📦 Сборка в автономный `.exe`
 
-## 4. Build an .exe folder
+Вы можете собрать приложение в виде папки с готовым исполняемым файлом без необходимости устанавливать Python:
 
-First put `ffmpeg.exe` and `ffprobe.exe` in `bin` if you want them shipped alongside the application. Then run:
+1. Убедитесь, что `ffmpeg.exe` и `ffprobe.exe` лежат в папке `bin/`.
+2. Запустите:
 
 ```bat
 build_windows.bat
 ```
 
-Output:
-
+Результат сборки появится в папке:
 ```text
 dist\ReelAudioStudio\ReelAudioStudio.exe
 ```
 
-The build script also embeds `assets\reel_audio.ico` as the Windows executable icon and ships the UI assets folder.
+Сборка автоматически вшивает фирменную иконку `assets\reel_audio.ico` и упаковывает все необходимые ассеты.
 
-This uses a PyInstaller **onedir** build instead of one giant executable, which is better suited to large native/AI dependencies.
+---
 
-## Current processing chain
+## 📊 Граф обработки звука
 
 ```text
-Input Reel
-   |
-   +-- optional Silero VAD / FFmpeg silencedetect
-   |      -> synchronized video+audio pause cuts
-   |
-   +-- optional DeepFilterNet
-   |
-   +-- highpass 70 Hz
-   +-- FFmpeg afftdn (when DeepFilterNet is off)
-   +-- voice presence EQ around 3 kHz
-   +-- FFmpeg acompressor
-   +-- optional FFmpeg loudnorm (target selectable: -16/-14/-12 LUFS)
-   +-- 48 kHz resample
-   +-- FFmpeg alimiter
-   |
-Final MP4 / M4A
+Входное видео / аудио
+   │
+   ├─► Опционально: Silero VAD / FFmpeg silencedetect
+   │      └── Синхронная нарезка пауз (видео + аудио)
+   │
+   ├─► Опционально: нейросеть DeepFilterNet
+   │
+   ├─► Highpass 70 Гц
+   ├─► FFmpeg afftdn (если выключен DeepFilterNet)
+   ├─► Эквалайзер присутствия голоса (~3 кГц)
+   ├─► FFmpeg acompressor
+   ├─► Опционально: FFmpeg loudnorm (-16 / -14 / -12 LUFS)
+   ├─► Ресемплинг в 48 кГц
+   └─► FFmpeg alimiter (пиковый лимитер)
+          │
+          ▼
+   Финальный MP4 / M4A
 ```
 
-## Important MVP limitations
+---
 
-- The current `Voice + Music` preset does not yet separate stems. It applies conservative voice-oriented processing only. A stem-separation module should be added in the next milestone.
-- Pause removal re-encodes video with H.264 because the timeline changes. Processing without pause removal copies the video stream and only re-encodes audio.
-- Loudness normalization can be toggled in the UI and is currently single-pass. FFmpeg supports double-pass normalization; that should be the next mastering upgrade.
-- The Music Ducking card is intentionally disabled until real voice/music stem separation is connected; the UI does not pretend an unavailable DSP stage is working.
-- I have not bundled AI weights or tested every Windows GPU configuration in this archive.
+## 🧪 Запуск тестов
 
-## Tests
-
-The pure processing-graph tests do not need PySide6:
+Тестирование графа обработки не требует запущенного PySide6:
 
 ```bat
 python -m unittest discover -s tests -v
 ```
 
+---
 
-## Glass / title-bar implementation
+## 💻 Технические детали Glass UI
 
-The window itself remains a native Qt Widgets application. It uses `Qt::FramelessWindowHint` only to replace the default title bar with the reference-style one. Moving and resizing call Qt's native `QWindow::startSystemMove()` / `startSystemResize()`, so the operating system still owns the actual move/resize interaction.
+- Приложение разработано на чистом **Qt Widgets (PySide6)** без использования веб-движков, Electron или CEF.
+- Для безрамочного оформления используется `Qt::FramelessWindowHint`.
+- Перемещение и изменение размеров окна вызывают нативные методы ОС `QWindow::startSystemMove()` и `QWindow::startSystemResize()`.
+- На **Windows 11 (сборка 22621+)** модуль `windows_effects.py` вызывает функцию DWM API с атрибутом `DWMWA_SYSTEMBACKDROP_TYPE` и параметром `DWMSBT_TRANSIENTWINDOW` (Desktop Acrylic), а также включает тёмную тему и скругление углов.
+- На более ранних версиях Windows автоматически включается полупрозрачный матовый Qt-фоллбэк.
 
-On Windows 11 build 22621+ `reel_audio/ui/windows_effects.py` calls the documented DWM `DWMWA_SYSTEMBACKDROP_TYPE` attribute with `DWMSBT_TRANSIENTWINDOW` (Desktop Acrylic), requests dark non-client rendering, and opts into rounded corners. No browser, Electron, WebView, or HTML/CSS renderer is used.
+---
 
-Official references:
+## 📄 Лицензия
 
-- Microsoft `DWM_SYSTEMBACKDROP_TYPE`: https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type
-- Microsoft `DWMWINDOWATTRIBUTE`: https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
-- Qt `QWindow::startSystemMove/startSystemResize`: https://doc.qt.io/qt-6/qwindow.html
-- Qt window flags (`FramelessWindowHint`): https://doc.qt.io/qt-6/qt.html
-
-### Glass UI v4
-
-This revision fixes the slider blocks seen on some Windows systems and makes the window materially more transparent. The timeline, volume, noise, voice, compression and ducking sliders are now custom-painted instead of relying on QSS `QSlider::sub-page`. On Windows 11 22H2+ the app requests Desktop Acrylic for the whole window and extends the DWM frame across the client area; if Windows does not provide that material, the Qt alpha-transparent fallback remains active.
+Распространяется под свободной лицензией. Подробнее о сторонних библиотеках см. в [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md).
