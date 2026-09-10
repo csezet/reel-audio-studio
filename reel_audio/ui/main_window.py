@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import shutil
+import sys
 import tempfile
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QEasingCurve, Property, QPropertyAnimation, QRectF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QEasingCurve, Property, QProcess, QPropertyAnimation, QRectF, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListView,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -260,6 +263,46 @@ class GlassSlider(QSlider):
         super().mouseReleaseEvent(event)
 
 
+class GlassComboBox(QComboBox):
+    """Combo box with a controlled glass popup and no native focus rectangle.
+
+    Export selectors currently contain a single valid option.  For those fields
+    ``lock_single`` prevents opening a one-row popup that looks like a stray
+    black rectangle on Windows while keeping the control visually consistent.
+    """
+
+    def __init__(self, parent=None, *, lock_single: bool = False):
+        super().__init__(parent)
+        self._lock_single = lock_single
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        view = QListView(self)
+        view.setObjectName("GlassComboPopup")
+        view.setFrameShape(QFrame.Shape.NoFrame)
+        view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        view.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        view.setSpacing(2)
+        self.setView(view)
+
+    def showPopup(self) -> None:
+        if self._lock_single and self.count() <= 1:
+            self.clearFocus()
+            return
+        super().showPopup()
+        # The popup is a separate top-level container.  Make its content fully
+        # controlled by our stylesheet rather than the Windows/Fusion focus UI.
+        popup = self.view().window()
+        if popup is not None:
+            popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self._lock_single and self.count() <= 1:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class IconBadge(QWidget):
     def __init__(self, icon_name: str, size: int = 52, parent=None):
         super().__init__(parent)
@@ -277,43 +320,94 @@ class IconBadge(QWidget):
 
 
 class CaptionButton(QAbstractButton):
+    """Compact Windows-11-like caption control with an inset rounded backplate.
+
+    The previous implementation used ``fillRect(self.rect())`` for hover states.
+    On a frameless title bar that produced conspicuous square blocks.  This
+    version paints the hover/pressed material inside the button bounds and
+    fades it in/out, so the controls visually belong to the rounded glass shell.
+    """
+
     def __init__(self, kind: str, parent=None):
         super().__init__(parent)
         self.kind = kind
-        self.setFixedSize(46, 34)
+        self.setFixedSize(40, 32)
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._hover_progress = 0.0
+        self._hover_anim = QPropertyAnimation(self, b"hoverProgress", self)
+        self._hover_anim.setDuration(125)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _get_hover_progress(self) -> float:
+        return self._hover_progress
+
+    def _set_hover_progress(self, value: float) -> None:
+        self._hover_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    hoverProgress = Property(float, _get_hover_progress, _set_hover_progress)
+
+    def _animate_hover(self, target: float) -> None:
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_progress)
+        self._hover_anim.setEndValue(target)
+        if ui_animations_enabled():
+            self._hover_anim.start()
+        else:
+            self._set_hover_progress(target)
 
     def enterEvent(self, event):
-        self.update(); super().enterEvent(event)
+        self._animate_hover(1.0)
+        super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.update(); super().leaveEvent(event)
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        hovered = self.underMouse()
+
+        hover = self._hover_progress
         pressed = self.isDown()
-        if self.kind == "close" and hovered:
-            p.fillRect(self.rect(), QColor(196, 54, 65, 235 if not pressed else 255))
-        elif hovered:
-            p.fillRect(self.rect(), QColor(255, 255, 255, 17 if not pressed else 28))
-        pen = QPen(QColor("#dce3e9"), 1.25)
-        pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+        plate = QRectF(self.rect()).adjusted(3.0, 2.0, -3.0, -2.0)
+        radius = 7.0
+
+        p.setPen(Qt.PenStyle.NoPen)
+        if self.kind == "close":
+            # Red is reserved for the destructive close action, but unlike the
+            # old full-cell rectangle it stays inset and follows the UI radius.
+            alpha = int((210 if not pressed else 238) * hover)
+            if alpha:
+                p.setBrush(QColor(196, 55, 66, alpha))
+                p.drawRoundedRect(plate, radius, radius)
+        else:
+            alpha = int((22 if not pressed else 34) * hover)
+            if alpha:
+                p.setBrush(QColor(255, 255, 255, alpha))
+                p.drawRoundedRect(plate, radius, radius)
+
+        icon_color = QColor("#ffffff") if self.kind == "close" and hover > 0.22 else QColor("#dce3e9")
+        pen = QPen(icon_color, 1.2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         p.setPen(pen)
         cx, cy = self.width() / 2.0, self.height() / 2.0
+
         if self.kind == "min":
-            p.drawLine(cx - 5, cy + 1, cx + 5, cy + 1)
+            p.drawLine(cx - 4.5, cy + 1.5, cx + 4.5, cy + 1.5)
         elif self.kind == "max":
             window = self.window()
             if hasattr(window, "isMaximized") and window.isMaximized():
-                p.drawRect(QRectF(cx - 4.2, cy - 3.2, 8, 7))
-                p.drawRect(QRectF(cx - 2.2, cy - 5.2, 8, 7))
+                # Restore glyph: two softly rounded overlapping outlines.
+                p.drawRoundedRect(QRectF(cx - 3.8, cy - 2.8, 7.6, 6.6), 1.1, 1.1)
+                p.drawRoundedRect(QRectF(cx - 1.8, cy - 4.8, 7.6, 6.6), 1.1, 1.1)
             else:
-                p.drawRect(QRectF(cx - 4.5, cy - 4.5, 9, 9))
+                p.drawRoundedRect(QRectF(cx - 4.2, cy - 4.2, 8.4, 8.4), 1.2, 1.2)
         else:
-            p.drawLine(cx - 4.5, cy - 4.5, cx + 4.5, cy + 4.5)
-            p.drawLine(cx + 4.5, cy - 4.5, cx - 4.5, cy + 4.5)
+            p.drawLine(cx - 4.0, cy - 4.0, cx + 4.0, cy + 4.0)
+            p.drawLine(cx + 4.0, cy - 4.0, cx - 4.0, cy + 4.0)
 
 
 class TitleBar(QWidget):
@@ -324,7 +418,7 @@ class TitleBar(QWidget):
         self.setFixedHeight(64)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(18, 8, 4, 5)
+        row.setContentsMargins(18, 8, 8, 5)
         row.setSpacing(12)
         badge = IconBadge("waveform", 48)
         row.addWidget(badge)
@@ -348,7 +442,7 @@ class TitleBar(QWidget):
         self.settings_btn.clicked.connect(window.show_settings)
         row.addWidget(self.settings_btn)
 
-        controls = QHBoxLayout(); controls.setSpacing(0); controls.setContentsMargins(4, 0, 0, 0)
+        controls = QHBoxLayout(); controls.setSpacing(1); controls.setContentsMargins(5, 0, 0, 0)
         self.min_btn = CaptionButton("min")
         self.max_btn = CaptionButton("max")
         self.close_btn = CaptionButton("close")
@@ -586,21 +680,38 @@ class SettingCard(QFrame):
 
 
 class SettingsDialog(QDialog):
-    """In-app settings sheet matching the glass UI instead of a native message box."""
+    """Glass settings sheet with live component installation controls."""
+
+    INSTALLS = {
+        # DeepFilterNet's own README instructs installing PyTorch/torchaudio
+        # before the wheel, so keep that as a two-step operation.
+        "DeepFilterNet": [
+            ["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--upgrade", "torch", "torchaudio"],
+            ["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--upgrade", "deepfilternet"],
+        ],
+        "Silero VAD": [
+            ["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--upgrade", "silero-vad"],
+        ],
+    }
 
     def __init__(self, parent: "MainWindow"):
         super().__init__(parent)
+        self.owner = parent
         self.setWindowTitle("Настройки")
         self.setModal(True)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedSize(560, 390)
+        self.setFixedSize(650, 465)
+        self._process: QProcess | None = None
+        self._install_component: str | None = None
+        self._install_steps: list[list[str]] = []
+        self._component_widgets: dict[str, tuple[QLabel, QPushButton | None]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         panel = QFrame(); panel.setObjectName("SettingsPanel")
         root.addWidget(panel)
-        layout = QVBoxLayout(panel); layout.setContentsMargins(18, 14, 18, 16); layout.setSpacing(12)
+        layout = QVBoxLayout(panel); layout.setContentsMargins(20, 15, 20, 16); layout.setSpacing(11)
 
         header = QHBoxLayout(); header.setSpacing(9)
         icon = QLabel(); icon.setPixmap(make_icon("settings", "#e5ebf0", 96).pixmap(24, 24)); icon.setFixedSize(28, 28)
@@ -624,25 +735,23 @@ class SettingsDialog(QDialog):
         layout.addWidget(ui_card)
 
         section = QLabel("СИСТЕМНЫЕ КОМПОНЕНТЫ"); section.setObjectName("SettingsSection"); layout.addWidget(section)
+        self.components_layout = QVBoxLayout(); self.components_layout.setSpacing(7); layout.addLayout(self.components_layout)
+        self._build_component_rows()
 
-        ff = find_executable("ffmpeg")
-        fp = find_executable("ffprobe")
-        components = [
-            ("FFmpeg", bool(ff), "Готов к обработке" if ff else "Не найден", ff or "Добавьте ffmpeg.exe в папку bin"),
-            ("FFprobe", bool(fp), "Готов" if fp else "Не найден", fp or "Добавьте ffprobe.exe в папку bin"),
-            ("DeepFilterNet", deepfilter_available(), "Установлен" if deepfilter_available() else "Не установлен", "Опциональное AI-шумоподавление"),
-            ("Silero VAD", silero_available(), "Установлен" if silero_available() else "Не установлен", "Опциональное определение речи и пауз"),
-        ]
-        for name, ok, state, tip in components:
-            row = QFrame(); row.setObjectName("SettingsRow")
-            row_l = QHBoxLayout(row); row_l.setContentsMargins(12, 7, 12, 7); row_l.setSpacing(9)
-            dot = QLabel("●"); dot.setObjectName("SettingsDotOk" if ok else "SettingsDotOff"); dot.setFixedWidth(12); row_l.addWidget(dot)
-            name_l = QLabel(name); name_l.setObjectName("SettingsRowTitle"); row_l.addWidget(name_l)
-            row_l.addStretch(1)
-            state_l = QLabel(state); state_l.setObjectName("SettingsStateOk" if ok else "SettingsStateOff"); state_l.setToolTip(str(tip)); row_l.addWidget(state_l)
-            layout.addWidget(row)
+        self.install_feedback = QLabel("")
+        self.install_feedback.setObjectName("InstallFeedback")
+        self.install_feedback.setWordWrap(True)
+        self.install_feedback.setVisible(False)
+        layout.addWidget(self.install_feedback)
 
-        local = QLabel("Все медиафайлы обрабатываются локально на этом ПК и не отправляются в браузер или облако.")
+        self.install_progress = QProgressBar()
+        self.install_progress.setRange(0, 0)
+        self.install_progress.setTextVisible(False)
+        self.install_progress.setFixedHeight(4)
+        self.install_progress.setVisible(False)
+        layout.addWidget(self.install_progress)
+
+        local = QLabel("Все медиафайлы обрабатываются локально на этом ПК. Для установки AI-модулей интернет нужен только во время загрузки пакетов.")
         local.setObjectName("SettingsMuted"); local.setWordWrap(True); layout.addWidget(local)
         layout.addStretch(1)
 
@@ -657,13 +766,153 @@ class SettingsDialog(QDialog):
             QLabel#SettingsMuted { color:#919da8; font-size:10px; }
             QLabel#SettingsSection { color:#aeb9c3; font-size:9px; font-weight:750; letter-spacing:1px; padding-top:3px; }
             QFrame#SettingsCard, QFrame#SettingsRow { background:rgba(74,86,97,70); border:1px solid rgba(217,226,234,36); border-radius:9px; }
+            QFrame#SettingsRow:hover { background:rgba(88,101,113,78); border-color:rgba(221,230,238,54); }
             QLabel#SettingsRowTitle { color:#e9eef2; font-size:11px; font-weight:650; }
             QLabel#SettingsDotOk, QLabel#SettingsStateOk { color:#c8d5dd; font-size:10px; font-weight:650; }
             QLabel#SettingsDotOff, QLabel#SettingsStateOff { color:#818c96; font-size:10px; }
+            QLabel#InstallFeedback { color:#aebbc5; font-size:10px; padding:2px 4px; }
+            QLabel#InstallFeedback[error="true"] { color:#e2a1a1; }
+            QPushButton#InstallButton { min-width:88px; background:rgba(108,122,134,110); border:1px solid rgba(221,230,237,58); border-radius:7px; padding:5px 9px; color:#eef2f5; font-size:10px; font-weight:700; }
+            QPushButton#InstallButton:hover { background:rgba(133,148,160,145); border-color:rgba(235,241,246,88); }
+            QPushButton#InstallButton:pressed { background:rgba(80,92,102,155); }
+            QPushButton#InstallButton:disabled { color:#76818a; background:rgba(55,63,71,72); border-color:rgba(180,190,199,26); }
             QPushButton#SettingsDone { background:rgba(235,240,244,238); color:#232c33; border:1px solid rgba(255,255,255,245); border-radius:8px; padding:7px 12px; font-weight:750; }
             QPushButton#SettingsDone:hover { background:#ffffff; }
+            QProgressBar { background:rgba(91,102,112,58); border:none; border-radius:2px; }
+            QProgressBar::chunk { background:rgba(211,222,230,180); border-radius:2px; }
             QToolTip { background:#313b44; color:#ecf1f5; border:1px solid #596671; padding:5px; }
         """)
+
+    def _component_info(self) -> list[tuple[str, bool, str, str]]:
+        ff = find_executable("ffmpeg")
+        fp = find_executable("ffprobe")
+        deep_ok = deepfilter_available()
+        silero_ok = silero_available()
+        return [
+            ("FFmpeg", bool(ff), "Готов к обработке" if ff else "Не найден", ff or "Добавьте ffmpeg.exe в папку bin"),
+            ("FFprobe", bool(fp), "Готов" if fp else "Не найден", fp or "Добавьте ffprobe.exe в папку bin"),
+            ("DeepFilterNet", deep_ok, "Установлен" if deep_ok else "Не установлен", "AI-шумоподавление DeepFilterNet"),
+            ("Silero VAD", silero_ok, "Установлен" if silero_ok else "Не установлен", "Определение речи и пауз Silero VAD"),
+        ]
+
+    def _build_component_rows(self) -> None:
+        while self.components_layout.count():
+            item = self.components_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._component_widgets.clear()
+
+        for name, ok, state, tip in self._component_info():
+            row = QFrame(); row.setObjectName("SettingsRow")
+            row_l = QHBoxLayout(row); row_l.setContentsMargins(12, 7, 9, 7); row_l.setSpacing(9)
+            dot = QLabel("●"); dot.setObjectName("SettingsDotOk" if ok else "SettingsDotOff"); dot.setFixedWidth(12); row_l.addWidget(dot)
+            name_l = QLabel(name); name_l.setObjectName("SettingsRowTitle"); row_l.addWidget(name_l)
+            row_l.addStretch(1)
+            state_l = QLabel(state); state_l.setObjectName("SettingsStateOk" if ok else "SettingsStateOff"); state_l.setToolTip(str(tip)); row_l.addWidget(state_l)
+
+            install_btn: QPushButton | None = None
+            if name in self.INSTALLS:
+                install_btn = QPushButton("Установлено" if ok else "Установить")
+                install_btn.setObjectName("InstallButton")
+                install_btn.setEnabled(not ok)
+                install_btn.setCursor(Qt.CursorShape.PointingHandCursor if not ok else Qt.CursorShape.ArrowCursor)
+                if not ok:
+                    install_btn.clicked.connect(lambda checked=False, component=name: self._install(component))
+                row_l.addWidget(install_btn)
+            self._component_widgets[name] = (state_l, install_btn)
+            self.components_layout.addWidget(row)
+
+    def _python_for_install(self) -> str | None:
+        # In the normal run_windows.bat workflow sys.executable is the .venv
+        # Python, which is the correct interpreter to extend.  A frozen PyInstaller
+        # executable cannot run "-m pip", so look for a side-by-side development
+        # venv before falling back to Python from PATH.
+        if not getattr(sys, "frozen", False):
+            return sys.executable
+        roots = [Path(sys.executable).resolve().parent, Path(sys.executable).resolve().parent.parent]
+        for root in roots:
+            candidate = root / ".venv" / "Scripts" / "python.exe"
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which("python")
+
+    def _install(self, component: str) -> None:
+        if self._process is not None:
+            return
+        python = self._python_for_install()
+        if not python:
+            self._set_feedback("Не найден Python для установки модулей. Запустите проект через run_windows.bat или установите AI перед сборкой EXE.", error=True)
+            return
+
+        self._install_component = component
+        self._install_steps = [list(step) for step in self.INSTALLS[component]]
+        self.install_progress.setVisible(True)
+        self._set_feedback(f"Подготавливаю установку {component}… Это может занять несколько минут.")
+        for _name, (_state, button) in self._component_widgets.items():
+            if button is not None:
+                button.setEnabled(False)
+        self._install_python = python
+        self._start_install_step()
+
+    def _start_install_step(self) -> None:
+        if not self._install_steps:
+            importlib.invalidate_caches()
+            self.install_progress.setVisible(False)
+            component = self._install_component or "AI-компонент"
+            self._set_feedback(f"{component} установлен. Статус обновлён.")
+            self._install_component = None
+            self._process = None
+            self._build_component_rows()
+            self.owner._refresh_ai_controls()
+            return
+
+        args = self._install_steps.pop(0)
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.readyReadStandardOutput.connect(self._read_install_output)
+        process.finished.connect(self._install_finished)
+        process.errorOccurred.connect(self._install_process_error)
+        self._process = process
+        process.start(self._install_python, args)
+
+    def _read_install_output(self) -> None:
+        if self._process is None:
+            return
+        text = bytes(self._process.readAllStandardOutput()).decode("utf-8", errors="replace").strip()
+        if text:
+            # Keep the sheet clean: show only the last meaningful pip line.
+            line = next((x.strip() for x in reversed(text.splitlines()) if x.strip()), "")
+            if line:
+                self._set_feedback(line[:130])
+
+    def _install_finished(self, exit_code: int, _exit_status) -> None:
+        if exit_code != 0:
+            self.install_progress.setVisible(False)
+            component = self._install_component or "AI-компонент"
+            self._set_feedback(f"Не удалось установить {component}. Проверьте интернет и совместимость версии Python.", error=True)
+            self._process = None
+            self._install_component = None
+            self._build_component_rows()
+            return
+        self._process = None
+        self._start_install_step()
+
+    def _install_process_error(self, _error) -> None:
+        if self._process is None:
+            return
+        self.install_progress.setVisible(False)
+        self._set_feedback("Не удалось запустить установщик Python.", error=True)
+        self._process = None
+        self._install_component = None
+        self._build_component_rows()
+
+    def _set_feedback(self, text: str, *, error: bool = False) -> None:
+        self.install_feedback.setText(text)
+        self.install_feedback.setProperty("error", error)
+        self.install_feedback.style().unpolish(self.install_feedback)
+        self.install_feedback.style().polish(self.install_feedback)
+        self.install_feedback.setVisible(bool(text))
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 62:
@@ -774,7 +1023,7 @@ class MainWindow(QMainWindow):
         vol_icon = QLabel(); vol_icon.setPixmap(make_icon("volume", "#bdc7d0").pixmap(21,21)); vol_icon.setFixedSize(24,24); transport.addWidget(vol_icon)
         self.volume_slider = GlassSlider(Qt.Orientation.Horizontal, track_height=4, handle_diameter=13); self.volume_slider.setRange(0,100); self.volume_slider.setValue(90); self.volume_slider.setFixedWidth(210); self.volume_slider.valueChanged.connect(lambda v: self.audio_out.setVolume(v/100.0)); transport.addWidget(self.volume_slider)
         transport.addStretch(1)
-        self.rate = QComboBox(); self.rate.setObjectName("CompactCombo"); self.rate.addItems(["0.75x","1.0x","1.25x","1.5x"]); self.rate.setCurrentText("1.0x"); self.rate.currentTextChanged.connect(lambda t: self.player.setPlaybackRate(float(t[:-1]))); transport.addWidget(self.rate)
+        self.rate = GlassComboBox(); self.rate.setObjectName("CompactCombo"); self.rate.addItems(["0.75x","1.0x","1.25x","1.5x"]); self.rate.setCurrentText("1.0x"); self.rate.currentTextChanged.connect(lambda t: self.player.setPlaybackRate(float(t[:-1]))); transport.addWidget(self.rate)
         media_layout.addLayout(transport); layout.addWidget(self.media_panel)
 
         # Setting cards; responsive 6x1 on wide windows, 3x2 on narrower windows.
@@ -787,11 +1036,11 @@ class MainWindow(QMainWindow):
         if self.ducking_card.slider: self.ducking_card.slider.setEnabled(False)
         self.ducking_card.setToolTip("Модуль разделения голоса и музыки пока не подключён.")
         self.pause_card = SettingCard("scissors", "Удаление длинных пауз", "Находит тишину и синхронно сокращает видео", value=None, enabled=False)
-        self.keep_pause = QComboBox(); self.keep_pause.setObjectName("CardCombo"); self.keep_pause.addItems(["120 мс","180 мс","250 мс","350 мс"]); self.keep_pause.setCurrentText("180 мс"); self.pause_card.bottom.addWidget(self.keep_pause,1)
+        self.keep_pause = GlassComboBox(); self.keep_pause.setObjectName("CardCombo"); self.keep_pause.addItems(["120 мс","180 мс","250 мс","350 мс"]); self.keep_pause.setCurrentText("180 мс"); self.pause_card.bottom.addWidget(self.keep_pause,1)
         self.ai_vad = QPushButton("Silero"); self.ai_vad.setObjectName("ChipButton"); self.ai_vad.setCheckable(True); self.ai_vad.setEnabled(silero_available()); self.ai_vad.setIcon(make_state_icon("sparkles", "#bfc9d1", "#29323a")); self.ai_vad.setIconSize(QSize(14,14)); self.pause_card.bottom.addWidget(self.ai_vad)
         if not silero_available(): self.ai_vad.setToolTip("Опционально: pip install silero-vad")
         self.normalize_card = SettingCard("normalize", "Авто-нормализация", "Приводит громкость к выбранной цели LUFS", value=None, enabled=True)
-        self.lufs = QComboBox(); self.lufs.setObjectName("CardCombo"); self.lufs.addItems(["-16 LUFS","-14 LUFS","-12 LUFS"]); self.lufs.setCurrentText("-14 LUFS"); self.normalize_card.bottom.addWidget(self.lufs,1)
+        self.lufs = GlassComboBox(); self.lufs.setObjectName("CardCombo"); self.lufs.addItems(["-16 LUFS","-14 LUFS","-12 LUFS"]); self.lufs.setCurrentText("-14 LUFS"); self.normalize_card.bottom.addWidget(self.lufs,1)
         self.deepfilter = QPushButton("DeepFilter"); self.deepfilter.setObjectName("ChipButton"); self.deepfilter.setCheckable(True); self.deepfilter.setEnabled(deepfilter_available()); self.deepfilter.setIcon(make_state_icon("sparkles", "#bfc9d1", "#29323a")); self.deepfilter.setIconSize(QSize(14,14)); self.noise_card.bottom.addWidget(self.deepfilter)
         if not deepfilter_available(): self.deepfilter.setToolTip("Опционально: pip install deepfilternet")
         self.card_list = [self.noise_card,self.presence_card,self.compression_card,self.ducking_card,self.pause_card,self.normalize_card]
@@ -811,13 +1060,15 @@ class MainWindow(QMainWindow):
         export_layout = QHBoxLayout(export_panel); export_layout.setContentsMargins(14,9,14,9); export_layout.setSpacing(12)
         export_icon = QLabel(); export_icon.setPixmap(make_icon("upload", "#eef3f6", 128).pixmap(44,44)); export_icon.setFixedSize(50,50); export_icon.setAlignment(Qt.AlignmentFlag.AlignCenter); export_layout.addWidget(export_icon)
         export_text = QVBoxLayout(); export_text.setSpacing(1); et = QLabel("ЭКСПОРТИРОВАТЬ REEL"); et.setObjectName("ExportTitle"); es = QLabel("Сохранить обработанное видео на ПК"); es.setObjectName("Muted"); export_text.addWidget(et); export_text.addWidget(es); export_layout.addLayout(export_text,1)
-        self.format_combo = QComboBox(); self.format_combo.addItems(["MP4 (H.264)"]); export_layout.addWidget(self.format_combo)
-        self.quality_combo = QComboBox(); self.quality_combo.addItems(["Исходное качество"]); export_layout.addWidget(self.quality_combo)
+        self.format_combo = GlassComboBox(lock_single=True); self.format_combo.addItems(["MP4 (H.264)"]); export_layout.addWidget(self.format_combo)
+        self.quality_combo = GlassComboBox(lock_single=True); self.quality_combo.addItems(["Исходное качество"]); export_layout.addWidget(self.quality_combo)
         self.export_btn = QPushButton("Экспорт"); self.export_btn.setObjectName("ExportButton"); self.export_btn.setIcon(make_icon("upload", "#1e252b")); self.export_btn.setIconSize(QSize(21,21)); self.export_btn.setEnabled(False); self.export_btn.clicked.connect(self.export_result); export_layout.addWidget(self.export_btn)
         layout.addWidget(export_panel)
 
         # Footer / progress
         footer = QHBoxLayout(); footer.setSpacing(7)
+        creator = QLabel("csezet"); creator.setObjectName("CreatorTag"); footer.addWidget(creator)
+        creator_sep = QLabel("•"); creator_sep.setObjectName("FooterText"); footer.addWidget(creator_sep)
         self.status = QLabel("Готов к работе"); self.status.setObjectName("FooterText"); footer.addWidget(self.status)
         self.progress = QProgressBar(); self.progress.setRange(0,0); self.progress.setFixedWidth(145); self.progress.setFixedHeight(5); self.progress.setTextVisible(False); self.progress.setVisible(False); footer.addWidget(self.progress)
         footer.addStretch(1)
@@ -922,6 +1173,14 @@ class MainWindow(QMainWindow):
 
     def _refresh_system_status(self):
         self._ffmpeg_ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe"))
+
+    def _refresh_ai_controls(self):
+        deep_ok = deepfilter_available()
+        silero_ok = silero_available()
+        self.deepfilter.setEnabled(deep_ok)
+        self.ai_vad.setEnabled(silero_ok)
+        self.deepfilter.setToolTip("" if deep_ok else "Установите DeepFilterNet через Настройки")
+        self.ai_vad.setToolTip("" if silero_ok else "Установите Silero VAD через Настройки")
 
     def show_settings(self):
         dialog = SettingsDialog(self)
@@ -1059,6 +1318,7 @@ class MainWindow(QMainWindow):
         QLabel#Subtitle { color:#8f9aa5; font-size:10px; font-weight:500; letter-spacing:1px; }
         QLabel#FileLabel, QLabel#MediaName { color:#eef3f7; font-size:13px; font-weight:650; }
         QLabel#Muted, QLabel#FooterText { color:#909ba6; font-size:11px; }
+        QLabel#CreatorTag { color:#d5dde4; font-size:10px; font-weight:750; letter-spacing:1px; }
         QLabel#TimeLabel { color:#aeb8c2; padding-left:8px; }
         QLabel#CardTitle { color:#f0f4f7; font-size:12px; font-weight:700; }
         QLabel#CardDescription { color:#97a2ac; font-size:10px; }
@@ -1098,10 +1358,14 @@ class MainWindow(QMainWindow):
         QPushButton#ChipButton { padding:4px 6px; border-radius:6px; font-size:9px; color:#aeb8c1; }
         QPushButton#ChipButton:checked { background:rgba(210,220,228,190); color:#29323a; }
 
-        QComboBox { background:rgba(42,53,63,78); border:1px solid rgba(199,211,222,40); border-radius:7px; color:#dbe2e8; padding:6px 9px; min-width:108px; }
-        QComboBox:hover { border-color:rgba(218,227,235,68); }
-        QComboBox::drop-down { border:none; width:20px; }
-        QComboBox QAbstractItemView { background:#283139; border:1px solid #4d5963; selection-background-color:#53616d; color:#edf2f5; }
+        QComboBox { background:rgba(42,53,63,78); border:1px solid rgba(199,211,222,40); border-radius:7px; color:#dbe2e8; padding:6px 24px 6px 9px; min-width:108px; outline:0; }
+        QComboBox:hover { background:rgba(54,66,77,88); border-color:rgba(218,227,235,68); }
+        QComboBox:focus, QComboBox:on { background:rgba(54,66,77,88); border:1px solid rgba(218,227,235,68); outline:0; }
+        QComboBox::drop-down { border:none; width:22px; background:transparent; }
+        QComboBox::down-arrow { width:0px; height:0px; }
+        QListView#GlassComboPopup { background:rgba(35,44,52,250); border:1px solid rgba(211,222,231,62); border-radius:8px; color:#edf2f5; padding:4px; outline:0; selection-background-color:rgba(94,108,120,190); selection-color:#ffffff; }
+        QListView#GlassComboPopup::item { min-height:26px; padding:3px 8px; border-radius:5px; }
+        QListView#GlassComboPopup::item:hover, QListView#GlassComboPopup::item:selected { background:rgba(94,108,120,190); }
         QComboBox#CompactCombo { min-width:76px; max-width:86px; }
         QComboBox#CardCombo { min-width:70px; padding:5px 7px; font-size:10px; }
 

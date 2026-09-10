@@ -1,13 +1,13 @@
-# 🎙️ Reel Audio Studio — Glass UI v11 (Animated Cards)
+# 🎙️ Reel Audio Studio — Glass UI v13 (Rounded Caption)
 
 <p align="center">
   <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
-  Построено на <b>Qt Widgets / PySide6</b> с анимированным стеклянным интерфейсом (Animated Cards) и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
+  Построено на <b>Qt Widgets / PySide6</b> со скруглённым стеклянным интерфейсом, встроенным установщиком нейросетей и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
 </p>
 
 <p align="center">
-  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.4.0/ReelAudioStudio_GlassUI_v11_AnimatedCards.zip">
-    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.4.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.5.0/ReelAudioStudio_GlassUI_v13_RoundedCaption.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.5.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
@@ -24,6 +24,7 @@
   <img src="https://img.shields.io/badge/GUI-PySide6%20(Qt%206)-41CD52?style=flat&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/Платформа-Windows%2010%20%2F%2011-0078D6?style=flat&logo=windows&logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/Движок-FFmpeg-007808?style=flat&logo=ffmpeg&logoColor=white" alt="FFmpeg">
+  <img src="https://img.shields.io/badge/Автор-csezet-108548?style=flat&logo=github&logoColor=white" alt="csezet">
 </p>
 
 ---
@@ -31,13 +32,15 @@
 ## ✨ Возможности
 
 - **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
-- **Интерфейс Glass UI v11 (Animated Cards)**:
+- **Интерфейс Glass UI v13 (Rounded Caption & Animated)**:
+  - **Скруглённые кнопки заголовка**: кнопки свернуть, развернуть и закрыть теперь имеют аккуратные скруглённые подложки с плавной 125 мс hover-анимацией (OutCubic), идеально гармонирующие со скруглениями окна.
+  - **Встроенная асинхронная установка нейросетей**: возможность установить **DeepFilterNet** и **Silero VAD** прямо из интерфейса (в окне настроек) в 1 клик с живым отображением статуса загрузки.
+  - **GlassComboBox**: кастомный выпадающий список экспорта без системных артефактов фокуса.
   - Плавные hover-анимации карточек обработки и пресетов.
-  - Анимированное переключение тумблеров (`QPropertyAnimation` с кривой сглаживания OutCubic).
-  - Встроенное стеклянное модальное окно настроек (Settings Dialog) вместо системного чёрного диалога, с переключателем анимаций.
-  - Увеличенная акцентная иконка экспорта (44 px) и чистый интерфейс без отвлекающих бейджей в подвале.
-  - Комфортная плотность фона и нативные плавные анимации окна Windows 11 (DWM).
-  - Кастомный заголовок окна со стандартными кнопками (свернуть, развернуть, закрыть), поддержкой разворачивания по двойному клику и нативного перетаскивания.
+  - Анимированное переключение тумблеров (`QPropertyAnimation` OutCubic).
+  - Встроенное стеклянное модальное окно настроек (Settings Dialog).
+  - Увеличенная акцентная иконка экспорта (44 px) и лаконичный футер с авторским тегом `csezet`.
+  - Комфортная плотность фона (90–93%) и нативные плавные анимации окна Windows 11 (DWM).
   - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
   - История недавних файлов (Recent Files).
 - **Превью и контроль звука**:
