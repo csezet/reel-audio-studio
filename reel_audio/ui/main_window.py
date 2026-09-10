@@ -78,14 +78,17 @@ class GlassShell(QFrame):
         gradient = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
         # Semi-transparent grey glass: the desktop remains visible through it,
         # but the entire application keeps one coherent background plate.
-        gradient.setColorAt(0.0, QColor(55, 66, 77, 184))
-        gradient.setColorAt(0.52, QColor(37, 46, 55, 172))
-        gradient.setColorAt(1.0, QColor(27, 35, 42, 180))
+        # Soft glass: only a small amount of the desktop should show through.
+        # Keep opacity on the background plate itself (rather than windowOpacity)
+        # so text, icons and controls remain fully crisp and opaque.
+        gradient.setColorAt(0.0, QColor(55, 66, 77, 236))
+        gradient.setColorAt(0.52, QColor(37, 46, 55, 230))
+        gradient.setColorAt(1.0, QColor(27, 35, 42, 234))
         painter.fillPath(path, gradient)
 
         if not maximized:
             painter.setClipping(False)
-            painter.setPen(QPen(QColor(213, 224, 233, 62), 1.0))
+            painter.setPen(QPen(QColor(213, 224, 233, 46), 1.0))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
 
