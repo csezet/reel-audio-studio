@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QEasingCurve, Property, QProcess, QPropertyAnimation, QRectF, QSettings, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPalette, QPen
+from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -319,6 +319,80 @@ class IconBadge(QWidget):
         draw_vector_icon(p, self.icon_name, QRectF(12, 12, self.width() - 24, self.height() - 24), QColor("#e7edf3"), 1.8)
 
 
+class FileAddButton(QAbstractButton):
+    """Clickable + tile that opens the same file picker as the main Open button.
+
+    Older builds used :class:`IconBadge` here.  IconBadge deliberately ignores
+    mouse events, so the tile looked interactive but could never be clicked.
+    This control keeps the same visual language while behaving as a real button.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(50, 50)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setToolTip("Выбрать видео или аудио")
+        self.setAccessibleName("Выбрать видео или аудио")
+        self._hover_progress = 0.0
+        self._hover_anim = QPropertyAnimation(self, b"hoverProgress", self)
+        self._hover_anim.setDuration(145)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _get_hover_progress(self) -> float:
+        return self._hover_progress
+
+    def _set_hover_progress(self, value: float) -> None:
+        self._hover_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    hoverProgress = Property(float, _get_hover_progress, _set_hover_progress)
+
+    def _animate_hover(self, target: float) -> None:
+        if not ui_animations_enabled():
+            self._set_hover_progress(target)
+            return
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_progress)
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
+
+    def enterEvent(self, event):
+        self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        hover = self._hover_progress
+        pressed = 1.0 if self.isDown() else 0.0
+        base_alpha = 74 + int(hover * 34)
+        if pressed:
+            base_alpha = 125
+
+        rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
+        border_alpha = 35 + int(hover * 45)
+        p.setPen(QPen(QColor(255, 255, 255, border_alpha), 1.0))
+        p.setBrush(QColor(110, 122, 134, base_alpha))
+        p.drawRoundedRect(rect, 14, 14)
+
+        # Subtle inner highlight makes the tile read as a button without
+        # introducing a hard rectangular Windows hover background.
+        if hover > 0.001 and not pressed:
+            glow = QRectF(rect).adjusted(2.0, 2.0, -2.0, -2.0)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(235, 242, 247, int(hover * 12)))
+            p.drawRoundedRect(glow, 12, 12)
+
+        icon_color = QColor(247, 250, 252) if (hover > 0.35 or pressed) else QColor("#e7edf3")
+        draw_vector_icon(p, "plus", QRectF(12, 12, self.width() - 24, self.height() - 24), icon_color, 1.9)
+
+
 class CaptionButton(QAbstractButton):
     """Compact Windows-11-like caption control with an inset rounded backplate.
 
@@ -592,6 +666,167 @@ class AnimatedPresetButton(QPushButton):
         p.drawRoundedRect(rect, 9.0, 9.0)
         p.end()
         super().paintEvent(event)
+
+
+
+class AnimatedPrimaryButton(QAbstractButton):
+    """Large primary action with native-painted hover/press/attention motion.
+
+    It intentionally remains interactive before a media file is selected so the
+    hover animation is always visible.  Clicking it without media produces a
+    short visual attention pulse instead of silently doing nothing.
+    """
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMinimumWidth(610)
+        self.setFixedHeight(46)
+        self._hover_progress = 0.0
+        self._attention_progress = 0.0
+
+        self._hover_anim = QPropertyAnimation(self, b"hoverProgress", self)
+        self._hover_anim.setDuration(170)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._attention_anim = QPropertyAnimation(self, b"attentionProgress", self)
+        self._attention_anim.setDuration(520)
+        self._attention_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._attention_anim.setKeyValueAt(0.0, 0.0)
+        self._attention_anim.setKeyValueAt(0.24, 1.0)
+        self._attention_anim.setKeyValueAt(0.58, 0.35)
+        self._attention_anim.setKeyValueAt(1.0, 0.0)
+
+    @staticmethod
+    def _mix(a: QColor, b: QColor, t: float) -> QColor:
+        t = max(0.0, min(1.0, float(t)))
+        return QColor(
+            round(a.red() + (b.red() - a.red()) * t),
+            round(a.green() + (b.green() - a.green()) * t),
+            round(a.blue() + (b.blue() - a.blue()) * t),
+            round(a.alpha() + (b.alpha() - a.alpha()) * t),
+        )
+
+    def _get_hover_progress(self) -> float:
+        return self._hover_progress
+
+    def _set_hover_progress(self, value: float) -> None:
+        self._hover_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    hoverProgress = Property(float, _get_hover_progress, _set_hover_progress)
+
+    def _get_attention_progress(self) -> float:
+        return self._attention_progress
+
+    def _set_attention_progress(self, value: float) -> None:
+        self._attention_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    attentionProgress = Property(float, _get_attention_progress, _set_attention_progress)
+
+    def _animate_hover(self, target: float) -> None:
+        if not ui_animations_enabled():
+            self._set_hover_progress(target)
+            return
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_progress)
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
+
+    def pulse_attention(self) -> None:
+        if not ui_animations_enabled():
+            self.update()
+            return
+        self._attention_anim.stop()
+        self._attention_anim.setStartValue(0.0)
+        self._attention_anim.start()
+
+    def enterEvent(self, event):
+        if self.isEnabled():
+            self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        super().mousePressEvent(event)
+        self.update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        super().mouseReleaseEvent(event)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = QRectF(self.rect()).adjusted(0.8, 0.8, -0.8, -0.8)
+        hover = self._hover_progress if self.isEnabled() else 0.0
+        attention = self._attention_progress if self.isEnabled() else 0.0
+        pressed = 1.0 if self.isDown() else 0.0
+
+        if self.isEnabled():
+            top = self._mix(QColor(118, 131, 143, 214), QColor(146, 159, 171, 232), hover)
+            bottom = self._mix(QColor(69, 80, 90, 222), QColor(83, 96, 107, 234), hover)
+            if pressed:
+                top = self._mix(top, QColor(79, 91, 101, 236), 0.48)
+                bottom = self._mix(bottom, QColor(54, 64, 73, 238), 0.48)
+            if attention:
+                top = self._mix(top, QColor(166, 180, 191, 242), attention * 0.55)
+                bottom = self._mix(bottom, QColor(94, 108, 119, 240), attention * 0.42)
+            border = self._mix(QColor(225, 234, 241, 105), QColor(246, 250, 252, 188), max(hover * 0.72, attention))
+            text_color = QColor(250, 252, 253)
+        else:
+            top = QColor(72, 80, 88, 112)
+            bottom = QColor(49, 57, 64, 120)
+            border = QColor(168, 178, 187, 34)
+            text_color = QColor(113, 124, 134)
+
+        grad = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
+        grad.setColorAt(0.0, top)
+        grad.setColorAt(1.0, bottom)
+        p.setPen(QPen(border, 1.0 + 0.5 * attention))
+        p.setBrush(grad)
+        p.drawRoundedRect(rect, 13.0, 13.0)
+
+        # Small moving highlight on hover: subtle enough to read as Win11 glass,
+        # not as a browser-style button effect.
+        if hover > 0.02:
+            shine = QLinearGradient(rect.left(), 0.0, rect.right(), 0.0)
+            shine.setColorAt(0.0, QColor(255, 255, 255, 0))
+            shine.setColorAt(0.48, QColor(255, 255, 255, round(22 * hover)))
+            shine.setColorAt(0.62, QColor(255, 255, 255, round(7 * hover)))
+            shine.setColorAt(1.0, QColor(255, 255, 255, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(shine)
+            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 12.0, 12.0)
+
+        font = self.font()
+        font.setBold(True)
+        font.setPointSizeF(max(font.pointSizeF(), 10.5))
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.7)
+        p.setFont(font)
+        fm = p.fontMetrics()
+        text = self.text()
+        icon_size = 21.0
+        gap = 8.0
+        total = icon_size + gap + fm.horizontalAdvance(text)
+        x = rect.center().x() - total / 2.0
+        y = rect.center().y() - icon_size / 2.0
+        draw_vector_icon(p, "sparkles", QRectF(x, y, icon_size, icon_size), text_color, 1.7)
+        p.setPen(text_color)
+        p.drawText(QRectF(x + icon_size + gap, rect.top(), fm.horizontalAdvance(text) + 3, rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
+        if self.hasFocus() and self.isEnabled():
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(235, 242, 247, 92), 1.0, Qt.PenStyle.DotLine))
+            p.drawRoundedRect(rect.adjusted(3.0, 3.0, -3.0, -3.0), 10.0, 10.0)
 
 
 class SettingCard(QFrame):
@@ -971,12 +1206,13 @@ class MainWindow(QMainWindow):
         self.drop = DropFrame(self.load_file)
         self.drop.setFixedHeight(70)
         drop_layout = QHBoxLayout(self.drop); drop_layout.setContentsMargins(14, 10, 14, 10); drop_layout.setSpacing(12)
-        plus = IconBadge("plus", 50); drop_layout.addWidget(plus)
+        self.add_file_btn = FileAddButton(); self.add_file_btn.clicked.connect(self.open_file); drop_layout.addWidget(self.add_file_btn)
         file_box = QVBoxLayout(); file_box.setSpacing(2)
         self.file_label = QLabel("Выберите видео или перетащите файл сюда"); self.file_label.setObjectName("FileLabel")
         self.file_hint = QLabel("MP4, MOV, MKV, WebM, WAV, MP3  •  локальная обработка"); self.file_hint.setObjectName("Muted")
         file_box.addStretch(1); file_box.addWidget(self.file_label); file_box.addWidget(self.file_hint); file_box.addStretch(1)
         drop_layout.addLayout(file_box, 1)
+        self.remove_file_btn = QPushButton("Убрать файл"); self.remove_file_btn.setObjectName("RemoveFileButton"); self.remove_file_btn.setIcon(make_icon("x", "#cbd4dc")); self.remove_file_btn.setIconSize(QSize(17,17)); self.remove_file_btn.setToolTip("Убрать файл из проекта — файл на диске не удаляется"); self.remove_file_btn.clicked.connect(self.clear_selected_file); self.remove_file_btn.setVisible(False); drop_layout.addWidget(self.remove_file_btn)
         self.open_btn = QPushButton("Открыть файл"); self.open_btn.setObjectName("SecondaryButton"); self.open_btn.setIcon(make_icon("folder", "#dbe2e8")); self.open_btn.setIconSize(QSize(20,20)); self.open_btn.clicked.connect(self.open_file); drop_layout.addWidget(self.open_btn)
         self.history_btn = QPushButton("История"); self.history_btn.setObjectName("SecondaryButton"); self.history_btn.setIcon(make_icon("history", "#dbe2e8")); self.history_btn.setIconSize(QSize(20,20)); self.history_btn.clicked.connect(self.show_history_menu); drop_layout.addWidget(self.history_btn)
         layout.addWidget(self.drop)
@@ -1050,7 +1286,7 @@ class MainWindow(QMainWindow):
         action_panel = QFrame(); action_panel.setObjectName("ActionPanel"); action_panel.setFixedHeight(60)
         action_layout = QHBoxLayout(action_panel); action_layout.setContentsMargins(10,7,10,7); action_layout.setSpacing(10)
         action_layout.addStretch(1)
-        self.enhance_btn = QPushButton("АВТОМАТИЧЕСКИ УЛУЧШИТЬ ЗВУК"); self.enhance_btn.setObjectName("Primary"); self.enhance_btn.setIcon(make_icon("sparkles", "#f3f6f8")); self.enhance_btn.setIconSize(QSize(24,24)); self.enhance_btn.setMinimumWidth(610); self.enhance_btn.setFixedHeight(46); self.enhance_btn.setEnabled(False); self.enhance_btn.clicked.connect(self.enhance); action_layout.addWidget(self.enhance_btn, 3)
+        self.enhance_btn = AnimatedPrimaryButton("АВТОМАТИЧЕСКИ УЛУЧШИТЬ ЗВУК"); self.enhance_btn.setObjectName("Primary"); self.enhance_btn.clicked.connect(self.enhance); action_layout.addWidget(self.enhance_btn, 3)
         action_layout.addStretch(1)
         reset_btn = QPushButton("Сбросить всё"); reset_btn.setObjectName("GhostButton"); reset_btn.setIcon(make_icon("reset", "#bdc6cf")); reset_btn.setIconSize(QSize(17,17)); reset_btn.clicked.connect(lambda: self.apply_preset("Auto")); action_layout.addWidget(reset_btn)
         layout.addWidget(action_panel)
@@ -1173,6 +1409,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_system_status(self):
         self._ffmpeg_ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe"))
+        if hasattr(self, "enhance_btn"):
+            running = bool(self.processing_thread and self.processing_thread.isRunning())
+            # Keep the primary action hoverable before media is selected.  A click
+            # without media gives feedback instead of being a dead disabled control.
+            self.enhance_btn.setEnabled(self._ffmpeg_ready and not running)
 
     def _refresh_ai_controls(self):
         deep_ok = deepfilter_available()
@@ -1210,9 +1451,55 @@ class MainWindow(QMainWindow):
             except (TypeError,ValueError): pass
         self.media_meta.setText("  •  ".join(meta)); self.player.setSource(QUrl.fromLocalFile(str(p.resolve())))
         self.waveform.set_duration(int(info["duration"]*1000)); self.play_btn.setEnabled(True)
-        ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe")); self.enhance_btn.setEnabled(ready)
+        self.remove_file_btn.setVisible(True); self.remove_file_btn.setEnabled(True)
+        self.enhance_btn.setEnabled(self._ffmpeg_ready)
         self.after_btn.setEnabled(False); self.export_btn.setEnabled(False); self.before_btn.setChecked(True); self.after_btn.setChecked(False)
         self.status.setText("Строю waveform…"); self._load_waveform(str(p))
+
+    def clear_selected_file(self):
+        """Detach the current media from the project without deleting it on disk."""
+        if self.processing_thread and self.processing_thread.isRunning():
+            self.status.setText("Дождитесь окончания обработки перед сменой файла")
+            return
+
+        if self.wave_thread and self.wave_thread.isRunning():
+            self.wave_thread.requestInterruption()
+
+        self.player.stop()
+        # Qt documents that a null QUrl discards all data for the current source
+        # and stops related I/O, which is exactly what a project-level clear needs.
+        self.player.setSource(QUrl())
+
+        old_preview = self.processed_path
+        self.input_path = None
+        self.processed_path = None
+        self._last_info = None
+
+        if old_preview:
+            try:
+                old_preview.resolve().relative_to(self._temp_root.resolve())
+                old_preview.unlink(missing_ok=True)
+            except (ValueError, OSError):
+                pass
+
+        self.file_label.setText("Выберите видео или перетащите файл сюда")
+        self.file_hint.setText("MP4, MOV, MKV, WebM, WAV, MP3  •  локальная обработка")
+        self.media_name.setText("Файл не выбран")
+        self.media_meta.setText("Перетащите ролик в область выше")
+        self.time_label.setText("00:00 / 00:00")
+        self.timeline.setRange(0, 0)
+        self.timeline.setValue(0)
+        self.waveform.set_peaks([])
+        self.waveform.set_duration(0)
+        self.waveform.set_progress(0.0)
+        self.play_btn.setEnabled(False)
+        self.after_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.before_btn.setChecked(True)
+        self.after_btn.setChecked(False)
+        self.remove_file_btn.setVisible(False)
+        self.enhance_btn.setEnabled(self._ffmpeg_ready)
+        self.status.setText("Файл убран  •  выберите новый ролик или аудио")
 
     def _load_waveform(self, path: str):
         if self.wave_thread and self.wave_thread.isRunning(): self.wave_thread.requestInterruption()
@@ -1243,7 +1530,14 @@ class MainWindow(QMainWindow):
         )
 
     def enhance(self):
-        if not self.input_path: return
+        if not self._ffmpeg_ready:
+            self.enhance_btn.pulse_attention()
+            self.status.setText("FFmpeg/FFprobe не найдены • откройте Настройки")
+            return
+        if not self.input_path:
+            self.enhance_btn.pulse_attention()
+            self.status.setText("Сначала выберите видео или аудио")
+            return
         try: info = media_summary(self.input_path)
         except Exception as exc: QMessageBox.critical(self,"Ошибка",str(exc)); return
         suffix = ".mp4" if info["has_video"] else ".m4a"; preview = self._temp_root / f"preview_{uuid.uuid4().hex}{suffix}"
@@ -1251,7 +1545,10 @@ class MainWindow(QMainWindow):
         self.processing_thread.stage.connect(self.status.setText); self.processing_thread.done.connect(self._process_done); self.processing_thread.failed.connect(self._process_failed); self.processing_thread.start()
 
     def _set_busy(self, busy: bool):
-        self.progress.setVisible(busy); self.enhance_btn.setEnabled(not busy and self.input_path is not None); self.export_btn.setEnabled(not busy and self.processed_path is not None)
+        self.progress.setVisible(busy)
+        self.enhance_btn.setEnabled(not busy and self._ffmpeg_ready)
+        self.remove_file_btn.setEnabled(not busy)
+        self.export_btn.setEnabled(not busy and self.processed_path is not None)
 
     def _process_done(self, path: str):
         self.processed_path = Path(path); self.after_btn.setEnabled(True); self.export_btn.setEnabled(True); self._set_busy(False); self.status.setText("Готово  •  сравните До / После"); self.switch_source(True)
@@ -1343,6 +1640,9 @@ class MainWindow(QMainWindow):
         QPushButton#TitleGhostButton { background:transparent; border:1px solid transparent; color:#aeb8c1; padding:7px 10px; }
         QPushButton#TitleGhostButton:hover { background:rgba(255,255,255,12); border-color:rgba(255,255,255,18); }
         QPushButton#SecondaryButton { min-height:34px; min-width:118px; }
+        QPushButton#RemoveFileButton { min-height:34px; min-width:92px; background:rgba(76,65,69,58); color:#cbd4dc; border-color:rgba(225,198,203,34); }
+        QPushButton#RemoveFileButton:hover { background:rgba(126,66,73,95); color:#ffffff; border-color:rgba(238,167,176,78); }
+        QPushButton#RemoveFileButton:pressed { background:rgba(99,51,58,118); }
         QPushButton#PresetButton { text-align:left; background:transparent; border:none; border-radius:9px; color:#b9c3cc; padding:8px 11px; font-size:10px; }
         QPushButton#PresetButton:checked { background:transparent; border:none; color:#273038; }
         QPushButton#CompareButton { min-width:118px; background:rgba(43,54,64,62); color:#99a4ae; padding:7px 12px; }
@@ -1350,8 +1650,7 @@ class MainWindow(QMainWindow):
         QPushButton#SquareButton, QPushButton#TransportButton { min-width:0; padding:0; background:rgba(55,64,73,80); }
         QPushButton#TransportButton { border:none; width:34px; height:34px; }
         QPushButton#PlayButton { border-radius:23px; padding:0; background:rgba(121,133,144,128); border-color:rgba(225,233,239,52); }
-        QPushButton#Primary { background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(118,131,143,210), stop:1 rgba(69,80,90,218)); border:1px solid rgba(225,234,241,104); border-radius:13px; color:#fff; font-size:13px; font-weight:800; letter-spacing:1px; }
-        QPushButton#Primary:hover { background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(135,148,160,225), stop:1 rgba(79,91,102,228)); }
+        /* AnimatedPrimaryButton paints its own glass gradient, hover and attention pulse. */
         QPushButton#GhostButton { background:rgba(52,61,69,62); color:#acb6c0; }
         QPushButton#ExportButton { background:rgba(239,243,246,235); color:#20282f; border-color:rgba(255,255,255,238); font-weight:800; min-width:104px; }
         QPushButton#ExportButton:hover { background:#ffffff; }

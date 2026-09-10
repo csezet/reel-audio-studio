@@ -1,13 +1,13 @@
-# 🎙️ Reel Audio Studio — Glass UI v13 (Rounded Caption)
+# 🎙️ Reel Audio Studio — Glass UI v15 (Clickable Plus)
 
 <p align="center">
   <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
-  Построено на <b>Qt Widgets / PySide6</b> со скруглённым стеклянным интерфейсом, встроенным установщиком нейросетей и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
+  Построено на <b>Qt Widgets / PySide6</b> со скруглённым стеклянным интерфейсом, быстрым добавлением файлов и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
 </p>
 
 <p align="center">
-  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.5.0/ReelAudioStudio_GlassUI_v13_RoundedCaption.zip">
-    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.5.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.6.0/ReelAudioStudio_GlassUI_v15_ClickablePlus.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.6.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
@@ -32,14 +32,17 @@
 ## ✨ Возможности
 
 - **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
-- **Интерфейс Glass UI v13 (Rounded Caption & Animated)**:
-  - **Скруглённые кнопки заголовка**: кнопки свернуть, развернуть и закрыть теперь имеют аккуратные скруглённые подложки с плавной 125 мс hover-анимацией (OutCubic), идеально гармонирующие со скруглениями окна.
-  - **Встроенная асинхронная установка нейросетей**: возможность установить **DeepFilterNet** и **Silero VAD** прямо из интерфейса (в окне настроек) в 1 клик с живым отображением статуса загрузки.
+- **Интерфейс Glass UI v15 (Clickable Plus & Animations)**:
+  - **Кликабельная плитка «+»**: большая кнопка «+» в зоне Drag & Drop теперь интерактивна — клик по ней открывает проводник для выбора файла.
+  - **Кнопка «Убрать файл»**: позволяет мгновенно открепить выбранное медиа и очистить рабочую область без удаления исходного файла с диска.
+  - **AnimatedPrimaryButton**: кнопка Auto Enhance плавно анимируется при наведении даже до загрузки файла, а при клике без файла мягко подсказывает действие.
+  - **Скруглённые кнопки заголовка**: кнопки управления окном (свернуть, развернуть, закрыть) с мягкой 125 мс hover-анимацией (OutCubic).
+  - **Встроенная асинхронная установка нейросетей**: установка **DeepFilterNet** и **Silero VAD** в 1 клик прямо из настроек с индикатором прогресса.
   - **GlassComboBox**: кастомный выпадающий список экспорта без системных артефактов фокуса.
   - Плавные hover-анимации карточек обработки и пресетов.
   - Анимированное переключение тумблеров (`QPropertyAnimation` OutCubic).
   - Встроенное стеклянное модальное окно настроек (Settings Dialog).
-  - Увеличенная акцентная иконка экспорта (44 px) и лаконичный футер с авторским тегом `csezet`.
+  - Лаконичный футер с авторским тегом `csezet`.
   - Комфортная плотность фона (90–93%) и нативные плавные анимации окна Windows 11 (DWM).
   - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
   - История недавних файлов (Recent Files).

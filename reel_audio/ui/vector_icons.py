@@ -45,6 +45,8 @@ def draw_vector_icon(p: QPainter, name: str, rect: QRectF, color: QColor | str =
         _ellipse(p, rect, 5.5,5.5,13,13)
     elif n == "plus":
         _line(p, rect, 12,5,12,19); _line(p, rect,5,12,19,12)
+    elif n in {"x", "close", "remove"}:
+        _line(p, rect, 6.5,6.5,17.5,17.5); _line(p, rect,17.5,6.5,6.5,17.5)
     elif n in {"folder", "folder-open"}:
         path = QPainterPath(_pt(rect, 3, 7)); path.lineTo(_pt(rect, 9,7)); path.lineTo(_pt(rect,11,9)); path.lineTo(_pt(rect,21,9)); path.lineTo(_pt(rect,20,19)); path.lineTo(_pt(rect,4,19)); path.closeSubpath(); p.drawPath(path)
     elif n == "history":
