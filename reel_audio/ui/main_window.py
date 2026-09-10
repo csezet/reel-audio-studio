@@ -5,7 +5,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QEasingCurve, Property, QPropertyAnimation, QRectF, QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -45,6 +46,11 @@ from .workers import ProcessingThread, WaveformThread
 SUPPORTED = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac", ".aac"}
 
 
+def ui_animations_enabled() -> bool:
+    value = QSettings("ReelAudioStudio", "ReelAudioStudio").value("ui_animations", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
 
 
 class GlassShell(QFrame):
@@ -81,9 +87,12 @@ class GlassShell(QFrame):
         # Soft glass: only a small amount of the desktop should show through.
         # Keep opacity on the background plate itself (rather than windowOpacity)
         # so text, icons and controls remain fully crisp and opaque.
-        gradient.setColorAt(0.0, QColor(55, 66, 77, 236))
-        gradient.setColorAt(0.52, QColor(37, 46, 55, 230))
-        gradient.setColorAt(1.0, QColor(27, 35, 42, 234))
+        # v10: denser glass.  Keep only a subtle hint of the desktop visible.
+        # Alpha is intentionally changed only on the background plate, not on
+        # the entire window, so text/icons/controls stay fully opaque and crisp.
+        gradient.setColorAt(0.0, QColor(55, 66, 77, 246))
+        gradient.setColorAt(0.52, QColor(37, 46, 55, 243))
+        gradient.setColorAt(1.0, QColor(27, 35, 42, 245))
         painter.fillPath(path, gradient)
 
         if not maximized:
@@ -94,16 +103,45 @@ class GlassShell(QFrame):
 
 
 class ToggleSwitch(QAbstractButton):
+    """Animated Windows-11-like toggle.
+
+    The knob position is a real Qt property so QPropertyAnimation can move it
+    smoothly instead of jumping between the two ends of the track.
+    """
+
     def __init__(self, checked: bool = True, parent=None):
         super().__init__(parent)
         self.setCheckable(True)
         self.setChecked(checked)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(42, 23)
-        self.toggled.connect(lambda _v: self.update())
+        self._position = 1.0 if checked else 0.0
+        self._anim = QPropertyAnimation(self, b"position", self)
+        self._anim.setDuration(145)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.toggled.connect(self._animate_toggle)
 
     def sizeHint(self) -> QSize:
         return QSize(42, 23)
+
+    def _get_position(self) -> float:
+        return self._position
+
+    def _set_position(self, value: float) -> None:
+        self._position = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    position = Property(float, _get_position, _set_position)
+
+    def _animate_toggle(self, checked: bool) -> None:
+        target = 1.0 if checked else 0.0
+        if not ui_animations_enabled():
+            self._set_position(target)
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._position)
+        self._anim.setEndValue(target)
+        self._anim.start()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -119,7 +157,9 @@ class ToggleSwitch(QAbstractButton):
         painter.setBrush(track)
         painter.drawRoundedRect(rect, 11, 11)
         diameter = 17.0
-        x = self.width() - diameter - 3.0 if self.isChecked() else 3.0
+        left_x = 3.0
+        right_x = self.width() - diameter - 3.0
+        x = left_x + (right_x - left_x) * self._position
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(knob)
         painter.drawEllipse(QRectF(x, 3.0, diameter, diameter))
@@ -305,7 +345,7 @@ class TitleBar(QWidget):
         self.settings_btn.setObjectName("TitleGhostButton")
         self.settings_btn.setIcon(make_icon("settings", "#c4ccd4"))
         self.settings_btn.setIconSize(QSize(18, 18))
-        self.settings_btn.clicked.connect(window.show_system_info)
+        self.settings_btn.clicked.connect(window.show_settings)
         row.addWidget(self.settings_btn)
 
         controls = QHBoxLayout(); controls.setSpacing(0); controls.setContentsMargins(4, 0, 0, 0)
@@ -367,6 +407,99 @@ class DropFrame(QFrame):
             event.acceptProposedAction()
 
 
+class AnimatedPresetButton(QPushButton):
+    """Preset tile with smooth hover and selected-state transitions."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hover_progress = 0.0
+        self._select_progress = 1.0 if self.isChecked() else 0.0
+        self._hover_anim = QPropertyAnimation(self, b"hoverProgress", self)
+        self._hover_anim.setDuration(165)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._select_anim = QPropertyAnimation(self, b"selectProgress", self)
+        self._select_anim.setDuration(190)
+        self._select_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.toggled.connect(self._animate_selected)
+
+    @staticmethod
+    def _mix(a: QColor, b: QColor, t: float) -> QColor:
+        t = max(0.0, min(1.0, t))
+        return QColor(
+            round(a.red() + (b.red() - a.red()) * t),
+            round(a.green() + (b.green() - a.green()) * t),
+            round(a.blue() + (b.blue() - a.blue()) * t),
+            round(a.alpha() + (b.alpha() - a.alpha()) * t),
+        )
+
+    def _get_hover_progress(self) -> float:
+        return self._hover_progress
+
+    def _set_hover_progress(self, value: float) -> None:
+        self._hover_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    hoverProgress = Property(float, _get_hover_progress, _set_hover_progress)
+
+    def _get_select_progress(self) -> float:
+        return self._select_progress
+
+    def _set_select_progress(self, value: float) -> None:
+        self._select_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    selectProgress = Property(float, _get_select_progress, _set_select_progress)
+
+    def _animate_hover(self, target: float) -> None:
+        if not ui_animations_enabled():
+            self._set_hover_progress(target)
+            return
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_progress)
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
+
+    def _animate_selected(self, checked: bool) -> None:
+        target = 1.0 if checked else 0.0
+        if not ui_animations_enabled():
+            self._set_select_progress(target)
+            return
+        self._select_anim.stop()
+        self._select_anim.setStartValue(self._select_progress)
+        self._select_anim.setEndValue(target)
+        self._select_anim.start()
+
+    def enterEvent(self, event):
+        self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.6, 0.6, -0.6, -0.6)
+        base = QColor(40, 50, 60, 70)
+        selected = QColor(235, 240, 244, 232)
+        fill = self._mix(base, selected, self._select_progress)
+        if self._hover_progress > 0 and self._select_progress < 0.98:
+            hover = QColor(78, 91, 103, 103)
+            fill = self._mix(fill, hover, self._hover_progress * 0.62)
+        border_a = QColor(194, 207, 219, 37)
+        border_b = QColor(255, 255, 255, 240)
+        border = self._mix(border_a, border_b, self._select_progress)
+        if self._hover_progress > 0 and self._select_progress < 0.98:
+            border = self._mix(border, QColor(226, 235, 242, 102), self._hover_progress)
+        p.setPen(QPen(border, 1.0))
+        p.setBrush(fill)
+        p.drawRoundedRect(rect, 9.0, 9.0)
+        p.end()
+        super().paintEvent(event)
+
+
 class SettingCard(QFrame):
     def __init__(self, icon_name: str, title: str, description: str, *, value: int | None = None, enabled: bool = True, parent=None):
         super().__init__(parent)
@@ -374,6 +507,11 @@ class SettingCard(QFrame):
         self.setMinimumWidth(160)
         self.setFixedHeight(150)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._hover_progress = 0.0
+        self._hover_anim = QPropertyAnimation(self, b"hoverProgress", self)
+        self._hover_anim.setDuration(170)
+        self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 12, 14, 12)
@@ -402,12 +540,137 @@ class SettingCard(QFrame):
             self.bottom.addWidget(self.slider, 1); self.bottom.addWidget(self.value_label)
         outer.addLayout(self.bottom)
 
+    def _get_hover_progress(self) -> float:
+        return self._hover_progress
+
+    def _set_hover_progress(self, value: float) -> None:
+        self._hover_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    hoverProgress = Property(float, _get_hover_progress, _set_hover_progress)
+
+    def _animate_hover(self, target: float) -> None:
+        if not ui_animations_enabled():
+            self._set_hover_progress(target)
+            return
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover_progress)
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
+
+    def enterEvent(self, event):
+        self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._hover_progress <= 0.001:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
+        p.setPen(QPen(QColor(226, 235, 242, int(46 * self._hover_progress)), 1.0))
+        p.setBrush(QColor(255, 255, 255, int(8 * self._hover_progress)))
+        p.drawRoundedRect(rect, 12.0, 12.0)
+
     def value(self) -> int:
         return self.slider.value() if self.slider is not None else 0
 
     def set_value(self, value: int) -> None:
         if self.slider is not None:
             self.slider.setValue(value)
+
+
+class SettingsDialog(QDialog):
+    """In-app settings sheet matching the glass UI instead of a native message box."""
+
+    def __init__(self, parent: "MainWindow"):
+        super().__init__(parent)
+        self.setWindowTitle("Настройки")
+        self.setModal(True)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedSize(560, 390)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        panel = QFrame(); panel.setObjectName("SettingsPanel")
+        root.addWidget(panel)
+        layout = QVBoxLayout(panel); layout.setContentsMargins(18, 14, 18, 16); layout.setSpacing(12)
+
+        header = QHBoxLayout(); header.setSpacing(9)
+        icon = QLabel(); icon.setPixmap(make_icon("settings", "#e5ebf0", 96).pixmap(24, 24)); icon.setFixedSize(28, 28)
+        header.addWidget(icon)
+        title_box = QVBoxLayout(); title_box.setSpacing(0)
+        title = QLabel("Настройки"); title.setObjectName("SettingsTitle")
+        sub = QLabel("Интерфейс и системные компоненты"); sub.setObjectName("SettingsMuted")
+        title_box.addWidget(title); title_box.addWidget(sub); header.addLayout(title_box); header.addStretch(1)
+        close_btn = CaptionButton("close", self); close_btn.clicked.connect(self.accept); header.addWidget(close_btn)
+        layout.addLayout(header)
+
+        ui_card = QFrame(); ui_card.setObjectName("SettingsCard")
+        ui_layout = QHBoxLayout(ui_card); ui_layout.setContentsMargins(14, 11, 14, 11); ui_layout.setSpacing(12)
+        ui_icon = QLabel(); ui_icon.setPixmap(make_icon("sparkles", "#cbd5dd", 96).pixmap(22, 22)); ui_icon.setFixedSize(26, 26); ui_layout.addWidget(ui_icon)
+        ui_text = QVBoxLayout(); ui_text.setSpacing(1)
+        ui_name = QLabel("Плавные анимации интерфейса"); ui_name.setObjectName("SettingsRowTitle")
+        ui_desc = QLabel("Наведение на карточки и плавное переключение тумблеров"); ui_desc.setObjectName("SettingsMuted")
+        ui_text.addWidget(ui_name); ui_text.addWidget(ui_desc); ui_layout.addLayout(ui_text, 1)
+        self.animation_toggle = ToggleSwitch(ui_animations_enabled()); ui_layout.addWidget(self.animation_toggle)
+        self.animation_toggle.toggled.connect(lambda checked: QSettings("ReelAudioStudio", "ReelAudioStudio").setValue("ui_animations", checked))
+        layout.addWidget(ui_card)
+
+        section = QLabel("СИСТЕМНЫЕ КОМПОНЕНТЫ"); section.setObjectName("SettingsSection"); layout.addWidget(section)
+
+        ff = find_executable("ffmpeg")
+        fp = find_executable("ffprobe")
+        components = [
+            ("FFmpeg", bool(ff), "Готов к обработке" if ff else "Не найден", ff or "Добавьте ffmpeg.exe в папку bin"),
+            ("FFprobe", bool(fp), "Готов" if fp else "Не найден", fp or "Добавьте ffprobe.exe в папку bin"),
+            ("DeepFilterNet", deepfilter_available(), "Установлен" if deepfilter_available() else "Не установлен", "Опциональное AI-шумоподавление"),
+            ("Silero VAD", silero_available(), "Установлен" if silero_available() else "Не установлен", "Опциональное определение речи и пауз"),
+        ]
+        for name, ok, state, tip in components:
+            row = QFrame(); row.setObjectName("SettingsRow")
+            row_l = QHBoxLayout(row); row_l.setContentsMargins(12, 7, 12, 7); row_l.setSpacing(9)
+            dot = QLabel("●"); dot.setObjectName("SettingsDotOk" if ok else "SettingsDotOff"); dot.setFixedWidth(12); row_l.addWidget(dot)
+            name_l = QLabel(name); name_l.setObjectName("SettingsRowTitle"); row_l.addWidget(name_l)
+            row_l.addStretch(1)
+            state_l = QLabel(state); state_l.setObjectName("SettingsStateOk" if ok else "SettingsStateOff"); state_l.setToolTip(str(tip)); row_l.addWidget(state_l)
+            layout.addWidget(row)
+
+        local = QLabel("Все медиафайлы обрабатываются локально на этом ПК и не отправляются в браузер или облако.")
+        local.setObjectName("SettingsMuted"); local.setWordWrap(True); layout.addWidget(local)
+        layout.addStretch(1)
+
+        buttons = QHBoxLayout(); buttons.addStretch(1)
+        done = QPushButton("Готово"); done.setObjectName("SettingsDone"); done.setFixedWidth(112); done.clicked.connect(self.accept); buttons.addWidget(done)
+        layout.addLayout(buttons)
+
+        self.setStyleSheet(r"""
+            QDialog { background: transparent; }
+            QFrame#SettingsPanel { background: rgba(31,39,47,248); border:1px solid rgba(218,228,236,68); border-radius:16px; }
+            QLabel#SettingsTitle { color:#f2f5f7; font-size:17px; font-weight:750; }
+            QLabel#SettingsMuted { color:#919da8; font-size:10px; }
+            QLabel#SettingsSection { color:#aeb9c3; font-size:9px; font-weight:750; letter-spacing:1px; padding-top:3px; }
+            QFrame#SettingsCard, QFrame#SettingsRow { background:rgba(74,86,97,70); border:1px solid rgba(217,226,234,36); border-radius:9px; }
+            QLabel#SettingsRowTitle { color:#e9eef2; font-size:11px; font-weight:650; }
+            QLabel#SettingsDotOk, QLabel#SettingsStateOk { color:#c8d5dd; font-size:10px; font-weight:650; }
+            QLabel#SettingsDotOff, QLabel#SettingsStateOff { color:#818c96; font-size:10px; }
+            QPushButton#SettingsDone { background:rgba(235,240,244,238); color:#232c33; border:1px solid rgba(255,255,255,245); border-radius:8px; padding:7px 12px; font-weight:750; }
+            QPushButton#SettingsDone:hover { background:#ffffff; }
+            QToolTip { background:#313b44; color:#ecf1f5; border:1px solid #596671; padding:5px; }
+        """)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 62:
+            wh = self.windowHandle()
+            if wh and wh.startSystemMove():
+                event.accept(); return
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -480,7 +743,7 @@ class MainWindow(QMainWindow):
             ("Podcast", "users", "PODCAST", "Интервью / Подкаст"),
         ]
         for key, icon_name, title, desc in preset_defs:
-            btn = QPushButton(f"{title}\n{desc}"); btn.setCheckable(True); btn.setObjectName("PresetButton"); btn.setFixedHeight(62)
+            btn = AnimatedPresetButton(f"{title}\n{desc}"); btn.setCheckable(True); btn.setObjectName("PresetButton"); btn.setFixedHeight(62)
             btn.setIcon(make_state_icon(icon_name, "#c5ced6", "#273038")); btn.setIconSize(QSize(23,23))
             btn.clicked.connect(lambda checked, name=key: self.apply_preset(name) if checked else None)
             self.preset_group.addButton(btn); self.preset_buttons[key] = btn; preset_row.addWidget(btn, 1)
@@ -497,7 +760,8 @@ class MainWindow(QMainWindow):
         self.before_btn = QPushButton("До обработки"); self.before_btn.setObjectName("CompareButton"); self.before_btn.setCheckable(True); self.before_btn.setChecked(True); self.before_btn.clicked.connect(lambda: self.switch_source(False)); media_header.addWidget(self.before_btn)
         self.after_btn = QPushButton("После обработки"); self.after_btn.setObjectName("CompareButton"); self.after_btn.setCheckable(True); self.after_btn.setEnabled(False); self.after_btn.clicked.connect(lambda: self.switch_source(True)); media_header.addWidget(self.after_btn)
         self.time_label = QLabel("00:00 / 00:00"); self.time_label.setObjectName("TimeLabel"); media_header.addWidget(self.time_label)
-        expand = QPushButton(); expand.setObjectName("SquareButton"); expand.setIcon(make_icon("expand", "#c9d2da")); expand.setIconSize(QSize(18,18)); expand.setFixedSize(36,34); expand.setToolTip("Развернуть окно"); expand.clicked.connect(self.toggle_maximize); media_header.addWidget(expand)
+        # v10: removed the duplicate expand/maximize button from the media header.
+        # Window maximize/restore remains available from the native title bar.
         media_layout.addLayout(media_header)
 
         self.waveform = WaveformWidget(); self.waveform.setMinimumHeight(118); self.waveform.setMaximumHeight(136); media_layout.addWidget(self.waveform, 1)
@@ -543,13 +807,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(action_panel)
 
         # Export bar
-        export_panel = QFrame(); export_panel.setObjectName("ExportPanel"); export_panel.setFixedHeight(66)
-        export_layout = QHBoxLayout(export_panel); export_layout.setContentsMargins(14,10,14,10); export_layout.setSpacing(10)
-        export_icon = QLabel(); export_icon.setPixmap(make_icon("upload", "#eef3f6").pixmap(34,34)); export_icon.setFixedSize(40,40); export_layout.addWidget(export_icon)
+        export_panel = QFrame(); export_panel.setObjectName("ExportPanel"); export_panel.setFixedHeight(70)
+        export_layout = QHBoxLayout(export_panel); export_layout.setContentsMargins(14,9,14,9); export_layout.setSpacing(12)
+        export_icon = QLabel(); export_icon.setPixmap(make_icon("upload", "#eef3f6", 128).pixmap(44,44)); export_icon.setFixedSize(50,50); export_icon.setAlignment(Qt.AlignmentFlag.AlignCenter); export_layout.addWidget(export_icon)
         export_text = QVBoxLayout(); export_text.setSpacing(1); et = QLabel("ЭКСПОРТИРОВАТЬ REEL"); et.setObjectName("ExportTitle"); es = QLabel("Сохранить обработанное видео на ПК"); es.setObjectName("Muted"); export_text.addWidget(et); export_text.addWidget(es); export_layout.addLayout(export_text,1)
         self.format_combo = QComboBox(); self.format_combo.addItems(["MP4 (H.264)"]); export_layout.addWidget(self.format_combo)
         self.quality_combo = QComboBox(); self.quality_combo.addItems(["Исходное качество"]); export_layout.addWidget(self.quality_combo)
-        self.export_btn = QPushButton("Экспорт"); self.export_btn.setObjectName("ExportButton"); self.export_btn.setIcon(make_icon("upload", "#1e252b")); self.export_btn.setIconSize(QSize(18,18)); self.export_btn.setEnabled(False); self.export_btn.clicked.connect(self.export_result); export_layout.addWidget(self.export_btn)
+        self.export_btn = QPushButton("Экспорт"); self.export_btn.setObjectName("ExportButton"); self.export_btn.setIcon(make_icon("upload", "#1e252b")); self.export_btn.setIconSize(QSize(21,21)); self.export_btn.setEnabled(False); self.export_btn.clicked.connect(self.export_result); export_layout.addWidget(self.export_btn)
         layout.addWidget(export_panel)
 
         # Footer / progress
@@ -557,8 +821,7 @@ class MainWindow(QMainWindow):
         self.status = QLabel("Готов к работе"); self.status.setObjectName("FooterText"); footer.addWidget(self.status)
         self.progress = QProgressBar(); self.progress.setRange(0,0); self.progress.setFixedWidth(145); self.progress.setFixedHeight(5); self.progress.setTextVisible(False); self.progress.setVisible(False); footer.addWidget(self.progress)
         footer.addStretch(1)
-        self.system_label = QLabel(); self.system_label.setObjectName("SystemStatus"); footer.addWidget(self.system_label)
-        footer.addWidget(QLabel("•  Локальная обработка  •  Без браузера")); layout.addLayout(footer)
+        layout.addLayout(footer)
 
         self.setStyleSheet(self._style())
         self._refresh_system_status(); self.apply_preset("Auto")
@@ -658,14 +921,11 @@ class MainWindow(QMainWindow):
         self._recent = []; QSettings("ReelAudioStudio", "ReelAudioStudio").setValue("recent_files", [])
 
     def _refresh_system_status(self):
-        ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe"))
-        self.system_label.setText("● FFmpeg готов" if ready else "● FFmpeg не найден")
-        self.system_label.setProperty("ok", ready); self.system_label.style().unpolish(self.system_label); self.system_label.style().polish(self.system_label)
+        self._ffmpeg_ready = bool(find_executable("ffmpeg")) and bool(find_executable("ffprobe"))
 
-    def show_system_info(self):
-        ff = find_executable("ffmpeg") or "не найден"; fp = find_executable("ffprobe") or "не найден"
-        df = "доступен" if deepfilter_available() else "не установлен"; vad = "доступен" if silero_available() else "не установлен"
-        QMessageBox.information(self,"Reel Audio Studio · Система",f"FFmpeg: {ff}\nFFprobe: {fp}\nDeepFilterNet: {df}\nSilero VAD: {vad}\n\nОбработка выполняется локально на ПК.")
+    def show_settings(self):
+        dialog = SettingsDialog(self)
+        dialog.exec()
 
     # ---- media ------------------------------------------------------------------------
     def open_file(self):
@@ -823,8 +1083,8 @@ class MainWindow(QMainWindow):
         QPushButton#TitleGhostButton { background:transparent; border:1px solid transparent; color:#aeb8c1; padding:7px 10px; }
         QPushButton#TitleGhostButton:hover { background:rgba(255,255,255,12); border-color:rgba(255,255,255,18); }
         QPushButton#SecondaryButton { min-height:34px; min-width:118px; }
-        QPushButton#PresetButton { text-align:left; background:rgba(40,50,60,70); border:1px solid rgba(194,207,219,37); border-radius:9px; color:#b9c3cc; padding:8px 11px; font-size:10px; }
-        QPushButton#PresetButton:checked { background:rgba(235,240,244,232); border-color:rgba(255,255,255,240); color:#273038; }
+        QPushButton#PresetButton { text-align:left; background:transparent; border:none; border-radius:9px; color:#b9c3cc; padding:8px 11px; font-size:10px; }
+        QPushButton#PresetButton:checked { background:transparent; border:none; color:#273038; }
         QPushButton#CompareButton { min-width:118px; background:rgba(43,54,64,62); color:#99a4ae; padding:7px 12px; }
         QPushButton#CompareButton:checked { background:rgba(94,106,117,152); color:#f2f5f7; border-color:rgba(213,224,233,67); }
         QPushButton#SquareButton, QPushButton#TransportButton { min-width:0; padding:0; background:rgba(55,64,73,80); }

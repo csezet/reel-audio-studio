@@ -1,13 +1,13 @@
-# 🎙️ Reel Audio Studio — Glass UI v9 (Soft Glass)
+# 🎙️ Reel Audio Studio — Glass UI v11 (Animated Cards)
 
 <p align="center">
   <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
-  Построено на <b>Qt Widgets / PySide6</b> с мягким стеклянным интерфейсом (Soft Glass) и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
+  Построено на <b>Qt Widgets / PySide6</b> с анимированным стеклянным интерфейсом (Animated Cards) и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
 </p>
 
 <p align="center">
-  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.3.0/ReelAudioStudio_GlassUI_v9_SoftGlass.zip">
-    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.3.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.4.0/ReelAudioStudio_GlassUI_v11_AnimatedCards.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.4.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
@@ -31,13 +31,14 @@
 ## ✨ Возможности
 
 - **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
-- **Интерфейс Glass UI v9 (Soft Glass)**:
-  - Комфортная плотность фона (90–93% непрозрачности) — рабочий стол виден лёгким благородным оттенком, а весь текст и интерфейс читаются идеально.
-  - Нативные плавные анимации сворачивания, восстановления и разворачивания окна Windows 11 через перехват `WM_NCCALCSIZE` и Win32 `ShowWindow`.
-  - Кастомная отрисовка `GlassShell` с антиалиасингом (`QPainterPath`) строго по скруглённому контуру окна (без паразитных теней и серых полос).
+- **Интерфейс Glass UI v11 (Animated Cards)**:
+  - Плавные hover-анимации карточек обработки и пресетов.
+  - Анимированное переключение тумблеров (`QPropertyAnimation` с кривой сглаживания OutCubic).
+  - Встроенное стеклянное модальное окно настроек (Settings Dialog) вместо системного чёрного диалога, с переключателем анимаций.
+  - Увеличенная акцентная иконка экспорта (44 px) и чистый интерфейс без отвлекающих бейджей в подвале.
+  - Комфортная плотность фона и нативные плавные анимации окна Windows 11 (DWM).
   - Кастомный заголовок окна со стандартными кнопками (свернуть, развернуть, закрыть), поддержкой разворачивания по двойному клику и нативного перетаскивания.
   - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
-  - Плавное изменение размера окна по системным границам.
   - История недавних файлов (Recent Files).
 - **Превью и контроль звука**:
   - Интерактивная визуализация аудиоволны (Waveform) со шкалой времени и курсором воспроизведения.
