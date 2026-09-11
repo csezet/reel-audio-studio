@@ -1,13 +1,13 @@
-# 🎙️ Reel Audio Studio — Glass UI v16 (Denser Glass)
+# 🎙️ Reel Audio Studio — Glass UI v17 (Engine Reliability)
 
 <p align="center">
   <b>Нативное Windows-приложение для локальной обработки и улучшения звука в Reels, Shorts и TikTok.</b><br>
-  Построено на <b>Qt Widgets / PySide6</b> с благородным стеклянным интерфейсом (Denser Glass), быстрым добавлением файлов и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
+  Построено на <b>Qt Widgets / PySide6</b> с надёжным двухпроходным движком мастеринга, AI-модулями и нативными анимациями Windows 11 (DWM). Никакого браузера, Electron или WebView.
 </p>
 
 <p align="center">
-  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.7.0/ReelAudioStudio_GlassUI_v16_DenserGlass.zip">
-    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.7.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
+  <a href="https://github.com/csezet/reel-audio-studio/releases/download/v1.8.0/ReelAudioStudio_GlassUI_v17_EngineReliability.zip">
+    <img src="https://img.shields.io/badge/СКАЧАТЬ%20ZIP-v1.8.0%20(Прямая%20ссылка)-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать релиз ZIP" height="42">
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/csezet/reel-audio-studio/archive/refs/heads/main.zip">
@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/GUI-PySide6%20(Qt%206)-41CD52?style=flat&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/Платформа-Windows%2010%20%2F%2011-0078D6?style=flat&logo=windows&logoColor=white" alt="Windows">
-  <img src="https://img.shields.io/badge/Движок-FFmpeg-007808?style=flat&logo=ffmpeg&logoColor=white" alt="FFmpeg">
+  <img src="https://img.shields.io/badge/Движок-FFmpeg%20%2B%20ONNX-007808?style=flat&logo=ffmpeg&logoColor=white" alt="FFmpeg">
   <img src="https://img.shields.io/badge/Автор-csezet-108548?style=flat&logo=github&logoColor=white" alt="csezet">
 </p>
 
@@ -32,20 +32,20 @@
 ## ✨ Возможности
 
 - **Широкая поддержка форматов**: MP4, MOV, MKV, AVI, WebM, WAV, MP3, M4A, FLAC, AAC.
-- **Интерфейс Glass UI v16 (Denser Glass)**:
-  - **Идеальный баланс плотности стекла**: градиент фона скорректирован до ~98% непрозрачности (значения альфа 250/249/250) — рабочий стол не отвлекает, а интерфейс выглядит монолитным, стильным и кристально чётким.
-  - **Кликабельная плитка «+»**: большая кнопка «+» в зоне Drag & Drop открывает проводник для выбора файла в один клик.
-  - **Кнопка «Убрать файл»**: позволяет мгновенно открепить выбранное медиа и сбросить рабочую область без удаления файла с диска.
-  - **AnimatedPrimaryButton**: главная кнопка Auto Enhance плавно анимируется при наведении и подсказывает действие.
-  - **Скруглённые кнопки заголовка**: кнопки управления окном (свернуть, развернуть, закрыть) с мягкой 125 мс hover-анимацией (OutCubic).
-  - **Встроенная асинхронная установка нейросетей**: установка **DeepFilterNet** и **Silero VAD** в 1 клик прямо из настроек с индикатором прогресса.
-  - **GlassComboBox**: кастомный выпадающий список экспорта без системных артефактов фокуса.
-  - Плавные hover-анимации карточек обработки и пресетов.
-  - Анимированное переключение тумблеров (`QPropertyAnimation` OutCubic).
-  - Встроенное стеклянное модальное окно настроек (Settings Dialog).
-  - Лаконичный футер с авторским тегом `csezet`.
+- **Нововведения движка v17 (Engine Reliability)**:
+  - **Двухпроходная нормализация громкости (Two-pass EBU R128)**: первый проход анализирует интегральную громкость, динамический диапазон и истинные пики, второй — производит точнейшую подгонку под целевые -16 / -14 / -12 LUFS без искажений.
+  - **Безопасное удаление пауз**: алгоритм строит строгое пересечение акустической тишины (FFmpeg `silencedetect`) и участков отсутствия речи (Silero VAD), предотвращая обрезание тихих согласных и вдохов.
+  - **Отменяемые процессы и реальный прогресс**: экспорт, построение формы волны и обработку можно мгновенно прервать без зависания интерфейса.
+  - **Атомарный экспорт файлов**: запись идёт во временный файл и подменяет целевой файл только при 100% успешном завершении, исключая повреждение файлов.
+  - **Пиковый лимитер с потолком -1.5 dBFS**: скорректировано авто-усиление лимитера для предотвращения интерсэмплового клиппинга при сжатии в AAC/MP3.
+  - **Silero VAD через ONNX**: возможность работы детектора голоса через быстрый легковесный `onnxruntime` без тяжеловесного PyTorch.
+  - **Полноценное тестовое покрытие**: 16 автоматических модульных тестов, охватывающих экспортёр, процессор, детекцию пауз и работу с утилитами.
+- **Интерфейс Glass UI**:
+  - Кликабельная плитка «+» и кнопка «Убрать файл» для удобного управления проектом.
+  - AnimatedPrimaryButton с динамическим hover-откликом.
+  - Скруглённые кнопки управления окном (свернуть, развернуть, закрыть) с мягкой анимацией.
+  - Встроенный асинхронный установщик AI-модулей прямо из настроек.
   - Нативные плавные анимации окна Windows 11 (DWM).
-  - Кастомные стеклянные слайдеры `GlassSlider` без артефактов масштабирования DPI.
   - История недавних файлов (Recent Files).
 - **Превью и контроль звука**:
   - Интерактивная визуализация аудиоволны (Waveform) со шкалой времени и курсором воспроизведения.
