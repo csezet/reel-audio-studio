@@ -42,3 +42,10 @@ The v17 processor was run with pause shortening + DSP + two-pass loudness normal
 - post-process loudness measurement reported integrated loudness about **−13.97 LUFS** for a −14 LUFS target on the synthetic test clip
 
 This verifies the engine path in the current environment. It does **not** substitute for a Windows 10/11 GUI, codec-driver and installer test matrix.
+
+
+## v18 regression check
+
+- `compileall`: passed.
+- `PYTHONPATH=. pytest -q`: **18 passed**.
+- Added source regression tests for the missing `QFont` import and for keeping the primary action clickable for FFmpeg diagnostics.

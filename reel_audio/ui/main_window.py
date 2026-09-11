@@ -318,7 +318,7 @@ class MainWindow(QMainWindow):
             running = bool(self.processing_thread and self.processing_thread.isRunning())
             # Keep the primary action hoverable before media is selected.  A click
             # without media gives feedback instead of being a dead disabled control.
-            self.enhance_btn.setEnabled(self._ffmpeg_ready and not running)
+            self.enhance_btn.setEnabled(not running)
 
     def _refresh_ai_controls(self):
         deep_ok = deepfilter_available()
@@ -358,7 +358,7 @@ class MainWindow(QMainWindow):
         self.media_meta.setText("  •  ".join(meta)); self.player.setSource(QUrl.fromLocalFile(str(p.resolve())))
         self.waveform.set_duration(int(info["duration"]*1000)); self.play_btn.setEnabled(True)
         self.remove_file_btn.setVisible(True); self.remove_file_btn.setEnabled(True)
-        self.enhance_btn.setEnabled(self._ffmpeg_ready)
+        self.enhance_btn.setEnabled(True)
         self.after_btn.setEnabled(False); self.export_btn.setEnabled(False); self.before_btn.setChecked(True); self.after_btn.setChecked(False)
         self.status.setText("Строю waveform…"); self._load_waveform(str(p))
 
@@ -406,7 +406,7 @@ class MainWindow(QMainWindow):
         self.before_btn.setChecked(True)
         self.after_btn.setChecked(False)
         self.remove_file_btn.setVisible(False)
-        self.enhance_btn.setEnabled(self._ffmpeg_ready)
+        self.enhance_btn.setEnabled(True)
         self.status.setText("Файл убран  •  выберите новый ролик или аудио")
 
     def _load_waveform(self, path: str):
@@ -483,7 +483,7 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool):
         self.progress.setVisible(busy)
         self.cancel_job_btn.setVisible(busy)
-        self.enhance_btn.setEnabled(not busy and self._ffmpeg_ready)
+        self.enhance_btn.setEnabled(not busy)
         self.remove_file_btn.setEnabled(not busy)
         self.export_btn.setEnabled(not busy and self.processed_path is not None)
         self.open_btn.setEnabled(not busy)

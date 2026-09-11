@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QEasingCurve, Property, QPropertyAnimation, QRectF, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QListView,
     QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget,
